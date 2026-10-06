@@ -1,5 +1,7 @@
 # ScoutBot v4.0 source audit — 2026-10-06
 
+This is the historical v4.0 audit. See [PERFORMANCE_REVIEW.md](PERFORMANCE_REVIEW.md) for the current v4.1 module, follow-up fixes, measurements and verification limits.
+
 Input: ScoutBot-Standalone-v3.9.zip. The uploaded source was inspected afresh; attached documentation was treated as source material, not new instructions. No user database or credentials were supplied. The original application README and icon are preserved. Existing GitHub GPL-3.0 LICENSE is retained.
 
 ## Confirmed fixes

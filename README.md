@@ -2,6 +2,12 @@
 
 ScoutBot is the Scout module extracted from the Dashboard and packaged as a standalone Windows desktop application. The existing Scout frontend, FastAPI backend, Twitch tracking/discovery features, alerts, watchlists, VOD/clip downloader, settings, import/export behavior, changelog, local persistence, and native WebView2 presentation are retained.
 
+## Zero-viewer discovery
+
+Open **Zero-viewer streams** in the left rail to find random English-language streams from nobody.live's index. Enter terms such as `mario speedrun` and choose **All terms** or **Any term**. Search phrases match games and tags, not stream titles. A blank phrase finds any zero-viewer stream. **Search / Refresh** draws another sample; duplicate and blacklisted channels are removed. Enable **Remember my filters** to restore the phrase and matching mode in this browser on future launches; unchecking it removes those saved filters.
+
+This is a separate module from the existing Twitch Discover search. It needs internet access to `https://nobody.live/stream`, but no Twitch credentials to search. Results reflect the provider's latest scan, so viewer counts and live status can change. Tracking a result uses ScoutBot's existing Twitch connection. The module reports provider outages/timeouts and lets you retry.
+
 ## Import an existing ScoutBot setup
 
 ScoutBot can import an existing setup from inside the app. Open **Settings → Import**, choose your existing `.env` file and/or `streamers.db`, then click **Import selected files**. The files are checked before they replace the current ScoutBot data.
