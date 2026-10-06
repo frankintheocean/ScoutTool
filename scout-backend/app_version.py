@@ -8,9 +8,21 @@
 # previous "prerelease vX.5"/"prerelease vX.0" scheme (0.5-per-change,
 # oldest release "prerelease v1.0") and the vX.X.0 scheme that followed it.
 
-APP_VERSION = "v4.2"
+APP_VERSION = "v4.3"
 
 CHANGELOG = [
+    {
+        "version": "v4.3",
+        "date": "2026-10-07",
+        "changes": [
+            "Saved numeric Twitch IDs and tracked confirmed username changes without losing notes, ratings, sessions, or alerts.",
+            "Added username checks and separately labelled, removable manual history for known earlier names.",
+            "Kept renamed channels' links, social scraping, discovery tracking actions, and watchlists tied to the saved account.",
+            "Added BetterBanned recent activity and ban/unban history, with on-demand refresh, copied-page-text import, and persistent snapshots retained after failures.",
+            "Added Open user in BetterBanned to streamer details, using the current username.",
+            "Batched identity lookups before bulk social scraping and prevented stale lookups from overwriting newer identity or activity records.",
+        ],
+    },
     {
         "version": "v4.2",
         "date": "2026-10-06",

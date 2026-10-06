@@ -12,6 +12,18 @@ Zero-viewer discovery needs internet access to `https://nobody.live/stream`, but
 
 Twitch Discover shares identical in-flight searches and reuses raw stream pages and user lookups for up to 30 seconds across overlapping filter combinations. This reduces API use while preserving search matching and pagination. Tracking/location/blacklist status is refreshed from the local database on every response. Completed zero-viewer samples are not cached; each refresh can draw a new sample. These optimizations reduce quota use but cannot eliminate Twitch's API limits.
 
+## Twitch identity and username history
+
+Streamer details now show the current username and saved numeric Twitch ID. Tracking resolves saved IDs rather than relying on old usernames; confirmed renames retain the same local notes, ratings, sessions, and alerts. **Check username** requests a fresh Twitch lookup. **Save ID** verifies an entered numeric ID with Twitch before saving it; an already saved ID cannot be replaced with a different account. These lookups need your configured Twitch connection. An unavailable account does not prove a rename or ban, and ScoutBot does not guess a replacement account.
+
+Twitch does not supply historical usernames. Known names from before tracking can be added manually and are labelled unverified, with an unknown change date. Confirmed changes record when ScoutBot observed them, rather than claiming the exact rename time.
+
+## BetterBanned activity and bans
+
+In streamer details, **Open user in BetterBanned** opens the current channel's `betterbanned.com/en/streamer/` page in a separate browser tab. **Refresh from BetterBanned** requests its public page on demand; it does not run for every channel in the background. The section displays the supplied total-ban count, dated recent activity, and a **Ban history** filter for bans and unbans, including any supplied reasons and durations. The visible section may cover only part of the channel's history; a missing total is shown as unknown.
+
+BetterBanned can require browser verification or block automated access. If refresh fails, the saved snapshot remains available. Open the channel page, copy **Total Bans** plus the **Recent Activity** heading and dated rows, then use **Save copied BetterBanned page text**. Copied snapshots are explicitly labelled unverified. Fetched data is attributed to BetterBanned, a third-party source, rather than Twitch. Snapshots persist across restarts and database backup/import. Activity saved under an earlier username remains labelled with that name until refreshed. No browser verification is bypassed.
+
 ## Import an existing ScoutBot setup
 
 ScoutBot can import an existing setup from inside the app. Open **Settings → Import**, choose your existing `.env` file and/or `streamers.db`, then click **Import selected files**. The files are checked before they replace the current ScoutBot data.
