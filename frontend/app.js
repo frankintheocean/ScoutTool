@@ -486,6 +486,7 @@ let _loadViewToken = 0;
 let _showAllController = null;
 
 async function loadView() {
+  renderRosterFilterChips();
   syncStateToUrl();
   const token = ++_loadViewToken;
   ++_dashboardRenderToken;
@@ -1655,7 +1656,56 @@ function renderEmptyState() {
   }
 }
 
+// Shared chip renderer uses DOM text, so filter values never become markup.
+function renderFilterChips(container, entries, clear) {
+  container.replaceChildren();
+  for (const entry of entries) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-ghost btn-small filter-chip";
+    button.textContent = `${entry.label} ×`;
+    button.setAttribute("aria-label", `Remove filter: ${entry.label}`);
+    button.addEventListener("click", entry.remove);
+    container.appendChild(button);
+  }
+  if (entries.length) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-ghost btn-small";
+    button.textContent = "Clear filters";
+    button.addEventListener("click", clear);
+    container.appendChild(button);
+  }
+}
+
+function renderRosterFilterChips() {
+  const entries = [];
+  const refresh = () => { clearTimeout(searchTimer); state.page = 1; loadView(); };
+  if (state.view === "roster") {
+    // Operators stay intact in the existing search input; removing this chip
+    // clears that input without disturbing independent dropdown filters.
+    if (state.search) entries.push({label: `Search: ${state.search}`, remove: () => {
+      state.search = ""; document.getElementById("searchInput").value = ""; refresh();
+    }});
+    for (const [key, id, label] of [["priority", "filterPriority", "Priority"], ["category", "filterCategory", "Category"], ["location", "filterLocation", "Location"]]) {
+      if (state[key]) entries.push({label: `${label}: ${state[key]}`, remove: () => {
+        state[key] = ""; document.getElementById(id).value = ""; refresh();
+      }});
+    }
+    if (state.liveOnly) entries.push({label: "Live only", remove: () => {
+      state.liveOnly = false; document.getElementById("filterLiveOnly").checked = false; refresh();
+    }});
+    for (const [key, label] of [["minFollowers", "Min followers"], ["maxFollowers", "Max followers"], ["tags", "Tags"]]) {
+      if (state[key] !== "" && state[key] != null) entries.push({label: `${label}: ${state[key]}`, remove: () => {
+        state[key] = key === "tags" ? "" : null; refresh();
+      }});
+    }
+  }
+  renderFilterChips(document.getElementById("rosterFilterChips"), entries, clearRosterFilters);
+}
+
 function clearRosterFilters() {
+  clearTimeout(searchTimer);
   state.search = "";
   state.priority = "";
   state.category = "";
@@ -3484,8 +3534,7 @@ function closeModal(id) {
     vodState.poll = null;
     vodState.busy = false;
   }
-  if (id === "discoverModal") cancelDiscoverRequest();
-  if (id === "nobodyDiscoverModal") window.ScoutNobodyDiscovery?.cancel();
+  if (id === "discoverModal") { cancelDiscoverRequest(); window.ScoutNobodyDiscovery?.cancel(); }
   if (activeModalId === id) {
     activeModalId = null;
     // Restore focus to whatever opened the modal, so keyboard users land
@@ -3676,6 +3725,8 @@ function cancelDiscoverRequest() {
   if (discoverState.abortController) {
     discoverState.abortController.abort();
     discoverState.abortController = null;
+    const results = document.getElementById("discoverResults");
+    if (results.textContent === "🔎 Searching Twitch…") results.textContent = "Search cancelled. Search again when you're ready.";
   }
 }
 
@@ -3840,8 +3891,7 @@ function renderDiscoverResults(filters) {
     `;
     const clearBtn = document.getElementById("discoverClearFilters");
     if (clearBtn) clearBtn.addEventListener("click", () => {
-      document.querySelectorAll(".discover-form .field-input, .discover-form select").forEach(el => { el.value = ""; });
-      document.getElementById("discoverSubmit").click();
+      clearTwitchFilters();
     });
     return;
   }
@@ -3996,21 +4046,85 @@ function populateDiscoverCategoryOptions() {
     .join("");
 }
 
+let discoveryTab = "twitch";
+function selectDiscoveryTab(tab, focus = false) {
+  discoveryTab = tab;
+  cancelDiscoverRequest();
+  window.ScoutNobodyDiscovery?.cancel();
+  for (const [key, suffix] of [["twitch", "Twitch"], ["zero", "Zero"]]) {
+    const selected = key === tab;
+    const button = document.getElementById(`discoveryTab${suffix}`);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    document.getElementById(`discoveryPanel${suffix}`).hidden = !selected;
+    if (selected && focus) button.focus();
+  }
+}
+for (const [key, suffix] of [["twitch", "Twitch"], ["zero", "Zero"]]) {
+  const button = document.getElementById(`discoveryTab${suffix}`);
+  button.addEventListener("click", () => selectDiscoveryTab(key));
+  button.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "twitch" : event.key === "End" ? "zero" : key === "twitch" ? "zero" : "twitch";
+    selectDiscoveryTab(next, true);
+  });
+}
+
 document.getElementById("btnDiscover").addEventListener("click", () => {
+  // Opening Twitch Discover still starts with a fresh result list; tab
+  // switches within the open screen preserve completed results.
   cancelDiscoverRequest();
   discoverState.items = [];
   discoverState.nextCursor = null;
-  discoverState.sort = "relevance";
-  discoverState.locationFilter = "";
-  const sortSel = document.getElementById("discoverSort");
-  if (sortSel) sortSel.value = "relevance";
-  const locationSel = document.getElementById("discoverLocationFilter");
-  if (locationSel) locationSel.value = "";
-  document.getElementById("discoverResults").innerHTML = "";
+  document.getElementById("discoverResults").replaceChildren();
+  document.getElementById("discoverSortRow").style.display = "none";
   populateDiscoverCategoryOptions();
   loadDiscoverHistory();
   loadLocations();
+  renderTwitchFilterChips();
+  selectDiscoveryTab(discoveryTab);
   openModal("discoverModal");
+});
+document.getElementById("btnDiscoveryRail").addEventListener("click", () => document.getElementById("btnDiscover").click());
+
+const twitchFilterFields = [
+  ["discoverCategory", "Category"], ["discoverMinViewers", "Min viewers"], ["discoverMaxViewers", "Max viewers"],
+  ["discoverMinFollowers", "Min followers"], ["discoverMaxFollowers", "Max followers"], ["discoverType", "Type"],
+  ["discoverLanguage", "Language"], ["discoverCreatedAfter", "Created after"], ["discoverCreatedBefore", "Created before"],
+  ["discoverTags", "Tags"], ["discoverExcludeTags", "Exclude tags"],
+];
+function clearTwitchFilters() {
+  for (const [id] of twitchFilterFields) document.getElementById(id).value = "";
+  discoverState.locationFilter = "";
+  document.getElementById("discoverLocationFilter").value = "";
+  renderTwitchFilterChips();
+  document.getElementById("discoverSubmit").click();
+}
+function renderTwitchFilterChips() {
+  const entries = twitchFilterFields.filter(([id]) => document.getElementById(id).value !== "").map(([id, label]) => ({
+    label: `${label}: ${document.getElementById(id).value}`,
+    remove: () => { document.getElementById(id).value = ""; renderTwitchFilterChips(); document.getElementById("discoverSubmit").click(); },
+  }));
+  if (discoverState.locationFilter) entries.push({label: `Location: ${discoverState.locationFilter}`, remove: () => {
+    discoverState.locationFilter = ""; document.getElementById("discoverLocationFilter").value = "";
+    renderTwitchFilterChips(); renderDiscoverResults();
+  }});
+  renderFilterChips(document.getElementById("discoverFilterChips"), entries, clearTwitchFilters);
+}
+for (const [id] of twitchFilterFields) document.getElementById(id).addEventListener("input", renderTwitchFilterChips);
+
+const toolsMenu = document.getElementById("toolsMenu");
+toolsMenu.addEventListener("click", event => {
+  if (!event.target.closest("button")) return;
+  toolsMenu.open = false;
+  const summary = toolsMenu.querySelector("summary");
+  if (activeModalId && toolsMenu.contains(lastFocusedBeforeModal)) lastFocusedBeforeModal = summary;
+  else summary.focus();
+});
+document.addEventListener("click", event => { if (!toolsMenu.contains(event.target)) toolsMenu.open = false; });
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && toolsMenu.open) { toolsMenu.open = false; toolsMenu.querySelector("summary").focus(); }
 });
 
 document.getElementById("discoverSort").addEventListener("change", (e) => {
@@ -4020,10 +4134,13 @@ document.getElementById("discoverSort").addEventListener("change", (e) => {
 
 document.getElementById("discoverLocationFilter").addEventListener("change", (e) => {
   discoverState.locationFilter = e.target.value;
+  renderTwitchFilterChips();
   renderDiscoverResults();
 });
 
 document.getElementById("discoverSubmit").addEventListener("click", async () => {
+  renderTwitchFilterChips();
+  cancelDiscoverRequest();
   const results = document.getElementById("discoverResults");
   results.innerHTML = `<div class="detail-empty">🔎 Searching Twitch…</div>`;
   discoverState.items = [];

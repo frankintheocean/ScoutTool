@@ -24,14 +24,19 @@
       <div class="stat"><span class="stat-value" id="statFollowers">0</span><span class="stat-label">total reach</span></div>
     </div>
     <div class="topbar-actions">
-      <button class="btn btn-ghost" id="btnChangelog" title="What's new"><span id="topbarVersion">…</span></button>
-      <button class="btn btn-ghost btn-icon" id="btnRescrapeAll" title="Re-scrape social links, bio &amp; location for all tracked streamers" aria-label="Re-scrape all tracked streamers">↻🌐</button>
-      <button class="btn btn-ghost btn-icon" id="btnSettings" title="Settings" aria-label="Settings">⚙</button>
       <button class="btn btn-ghost" id="btnDiscover">🔎 Discover</button>
-      <button class="btn btn-ghost" id="btnWatchlists" title="Category watchlists">👀 Watchlists</button>
-      <button class="btn btn-ghost" id="btnAlerts" title="Notification / alert rules">🔔 Alerts</button>
-      <button class="btn btn-ghost" id="btnRaidMap" title="Raid map — tracked streamers by region">🗺️ Raid Map</button>
       <button class="btn btn-primary" id="btnAdd">➕ Track Streamer</button>
+      <details class="tools-menu" id="toolsMenu">
+        <summary class="btn btn-ghost">Tools</summary>
+        <div class="tools-menu-panel">
+          <button class="btn btn-ghost" id="btnSettings">⚙ Settings</button>
+          <button class="btn btn-ghost" id="btnWatchlists">👀 Watchlists</button>
+          <button class="btn btn-ghost" id="btnAlerts">🔔 Alerts</button>
+          <button class="btn btn-ghost" id="btnRaidMap">🗺️ Raid Map</button>
+          <button class="btn btn-ghost" id="btnRescrapeAll" title="Re-scrape social links, bio &amp; location for all tracked streamers">↻ Re-scrape all</button>
+          <button class="btn btn-ghost" id="btnChangelog" title="What's new">What's new · <span id="topbarVersion">…</span></button>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -51,7 +56,7 @@
 
       <div class="rail-section">
         <div class="rail-label">Discovery</div>
-        <button class="btn btn-ghost" id="btnNobodyDiscover" style="width:100%;">Zero-viewer streams</button>
+        <button class="btn btn-ghost" id="btnDiscoveryRail" style="width:100%;">🔎 Discover</button>
       </div>
 
       <div class="rail-section">
@@ -153,6 +158,8 @@
           </div>
         </div>
       </div>
+
+      <div id="rosterFilterChips" class="filter-chips" aria-label="Active roster filters"></div>
 
       <div id="dashboardView" class="dashboard-view" style="display:none;">
         <div class="dashboard-toolbar">
@@ -529,10 +536,16 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="discoverModal" role="dialog" aria-modal="true" aria-label="Discover live streamers">
+<div class="modal-backdrop" id="discoverModal" role="dialog" aria-modal="true" aria-label="Discover streamers">
   <div class="modal modal-wide modal-discover">
-    <div class="modal-header">🔎 Discover live streamers</div>
+    <div class="modal-header">🔎 Discover streamers</div>
+    <div class="discovery-tabs" role="tablist" aria-label="Discovery source">
+      <button id="discoveryTabTwitch" class="btn btn-ghost" role="tab" aria-selected="true" aria-controls="discoveryPanelTwitch">Twitch Discover</button>
+      <button id="discoveryTabZero" class="btn btn-ghost" role="tab" aria-selected="false" aria-controls="discoveryPanelZero" tabindex="-1">Zero-viewer discovery</button>
+    </div>
     <div class="modal-body">
+      <section id="discoveryPanelTwitch" class="discovery-panel" role="tabpanel" aria-labelledby="discoveryTabTwitch">
+
       <div class="discover-form">
         <div class="field-group">
           <label class="field-label">Category</label>
@@ -586,6 +599,7 @@
         </div>
         <button class="btn btn-primary" id="discoverSubmit">Search</button>
       </div>
+      <div id="discoverFilterChips" class="filter-chips" aria-label="Active Twitch filters"></div>
       <div id="discoverHistory" class="discover-history" style="display:none;">
         <div class="rail-label-row">
           <div class="rail-label">Recent searches</div>
@@ -608,6 +622,34 @@
         <span id="discoverLocationFilterError" class="filter-load-error" style="display:none;" title="Couldn't load locations — try refreshing">⚠</span>
       </div>
       <div id="discoverResults" class="discover-results"></div>
+      </section>
+      <section id="discoveryPanelZero" class="discovery-panel" role="tabpanel" aria-labelledby="discoveryTabZero" hidden>
+
+      <p class="field-hint discovery-description">Find random English-language streams with zero viewers using nobody.live. Search matches games and tags; viewer counts can change after the last scan.</p>
+      <form id="nobodyDiscoverForm" class="discover-form">
+        <div class="field-group" style="grid-column:1 / -1;">
+          <label class="field-label" for="nobodySearchPhrase">Search phrase</label>
+          <input id="nobodySearchPhrase" class="field-input" type="text" maxlength="65" placeholder="e.g. mario speedrun" autocomplete="off">
+          <div class="field-hint">Separate terms with spaces or commas. Leave blank for any zero-viewer stream. Maximum 65 characters.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="nobodySearchMatch">Match</label>
+          <select id="nobodySearchMatch" class="field-input">
+            <option value="all">All terms</option>
+            <option value="any">Any term</option>
+          </select>
+        </div>
+        <label class="rail-checkbox">
+          <input id="nobodyRememberFilters" type="checkbox">
+          <span>Remember my filters</span>
+        </label>
+        <button class="btn btn-primary" id="nobodyDiscoverSubmit" type="submit">Search / Refresh</button>
+      </form>
+      <div id="nobodyFilterChips" class="filter-chips" aria-label="Active zero-viewer filters"></div>
+      <p id="nobodyDiscoverStatus" class="field-hint" role="status" aria-live="polite">Choose your filters and search.</p>
+      <div id="nobodyDiscoverResults" class="zero-viewer-results" aria-busy="false"></div>
+
+      </section>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-close="discoverModal">Close</button>
@@ -719,38 +761,6 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="nobodyDiscoverModal" role="dialog" aria-modal="true" aria-label="Zero-viewer discovery">
-  <div class="modal modal-wide">
-    <div class="modal-header">Zero-viewer discovery</div>
-    <div class="modal-body">
-      <p class="field-hint">Find random English-language streams with zero viewers using nobody.live. Search matches games and tags; viewer counts can change after the last scan.</p>
-      <form id="nobodyDiscoverForm" class="discover-form">
-        <div class="field-group" style="grid-column:1 / -1;">
-          <label class="field-label" for="nobodySearchPhrase">Search phrase</label>
-          <input id="nobodySearchPhrase" class="field-input" type="text" maxlength="65" placeholder="e.g. mario speedrun" autocomplete="off">
-          <div class="field-hint">Separate terms with spaces or commas. Leave blank for any zero-viewer stream. Maximum 65 characters.</div>
-        </div>
-        <div class="field-group">
-          <label class="field-label" for="nobodySearchMatch">Match</label>
-          <select id="nobodySearchMatch" class="field-input">
-            <option value="all">All terms</option>
-            <option value="any">Any term</option>
-          </select>
-        </div>
-        <label class="rail-checkbox">
-          <input id="nobodyRememberFilters" type="checkbox">
-          <span>Remember my filters</span>
-        </label>
-        <button class="btn btn-primary" id="nobodyDiscoverSubmit" type="submit">Search / Refresh</button>
-      </form>
-      <p id="nobodyDiscoverStatus" class="field-hint" role="status" aria-live="polite">Choose your filters and search.</p>
-      <div id="nobodyDiscoverResults" class="zero-viewer-results" aria-busy="false"></div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" data-close="nobodyDiscoverModal">Close</button>
-    </div>
-  </div>
-</div>
 
 <div class="toast-stack" id="toastStack"></div>
 

@@ -1,4 +1,4 @@
-// Standalone discovery module; existing Twitch Discover remains independent.
+// Zero-viewer tab keeps its filters and request state independent of Twitch Discover.
 (() => {
   "use strict";
   const STORAGE_KEY = "scoutbot_zero_viewer_filters";
@@ -21,6 +21,7 @@
       else localStorage.removeItem(STORAGE_KEY);
       return true;
     } catch {
+      status.classList.add("discovery-error");
       status.textContent = "Your browser could not save these filters. Search still works.";
       return false;
     }
@@ -40,6 +41,7 @@
   }
 
   function cancel() {
+    status.classList.remove("discovery-error");
     if (controller) status.textContent = "Search cancelled. Search again when you're ready.";
     controller?.abort();
     controller = null;
@@ -59,11 +61,11 @@
     return `<section class="zero-viewer-card">
       <a href="https://twitch.tv/${username}" target="_blank" rel="noopener">
         <img src="${escapeAttr(thumbnail)}" alt="" width="320" height="180" loading="lazy">
-        <strong>${escapeHtml(stream.display_name || stream.username)}</strong>
+        <strong class="card-username">${escapeHtml(stream.display_name || stream.username)}</strong>
       </a>
       <div class="discover-item-meta">0 viewers &middot; ${escapeHtml(stream.category || "No category")}</div>
-      <div>${escapeHtml(stream.title || "")}</div>
-      <div class="discover-item-meta">${escapeHtml((stream.tags || []).join(" · "))}</div>
+      <div class="zero-viewer-title">${escapeHtml(stream.title || "")}</div>
+      <div class="zero-viewer-tags">${(stream.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join("")}</div>
       ${trackButtonHtml(stream)}
     </section>`;
   }
@@ -87,7 +89,10 @@
         : "No matching zero-viewer streams found. Try fewer terms, Any term, or a blank search.";
       if (!saved) status.textContent += " Your browser could not save these filters.";
     } catch (error) {
-      if (error.name !== "AbortError" && controller === request) status.textContent = error.message;
+      if (error.name !== "AbortError" && controller === request) {
+        status.classList.add("discovery-error");
+        status.textContent = error.message;
+      }
     } finally {
       if (controller === request) {
         controller = null;
@@ -97,15 +102,25 @@
     }
   }
 
-  byId("btnNobodyDiscover").addEventListener("click", () => {
-    openModal("nobodyDiscoverModal");
-    phrase.focus();
-  });
+  function renderChips() {
+    const entries = [];
+    if (phrase.value.trim()) entries.push({label: `Search: ${phrase.value.trim()}`, remove: () => {
+      phrase.value = ""; renderChips(); search();
+    }});
+    if (match.value === "any") entries.push({label: "Any term", remove: () => {
+      match.value = "all"; renderChips(); search();
+    }});
+    renderFilterChips(byId("nobodyFilterChips"), entries, () => {
+      phrase.value = ""; match.value = "all"; renderChips(); search();
+    });
+  }
+  for (const field of [phrase, match]) field.addEventListener("input", renderChips);
   byId("nobodyDiscoverForm").addEventListener("submit", event => {
     event.preventDefault();
     search();
   });
   for (const field of [phrase, match, remember]) field.addEventListener("change", saveFilters);
   loadFilters();
+  renderChips();
   window.ScoutNobodyDiscovery = { cancel, reset };
 })();

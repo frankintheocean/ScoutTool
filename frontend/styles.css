@@ -73,7 +73,12 @@ html, body {
   align-items: center;
   gap: 32px;
   padding: 0 24px;
-  height: 60px;
+  min-height: 60px;
+  height: auto;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  flex-wrap: wrap;
+  row-gap: 8px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
@@ -138,13 +143,7 @@ html, body {
   gap: 10px;
 }
 
-/* When the window is narrower than the topbar's natural content width
-   (not maximized), the brand + live stats + action buttons no longer fit
-   on one non-wrapping 60px-tall row — the action buttons and icon buttons
-   were being visually squeezed together and clipped instead of reflowing.
-   Letting the row wrap (and relaxing the fixed height so a wrapped second
-   line has room) keeps every button fully visible and correctly sized at
-   any window width, instead of only rendering correctly when maximized. */
+/* Reduce spacing when the header wraps in a smaller window. */
 @media (max-width: 1300px) {
   .topbar {
     flex-wrap: wrap;
@@ -157,11 +156,6 @@ html, body {
     margin-left: 0;
     flex-wrap: wrap;
     row-gap: 6px;
-  }
-  .topbar-actions {
-    margin-left: 0;
-    flex-wrap: wrap;
-    width: 100%;
   }
 }
 
@@ -1106,10 +1100,8 @@ html, body {
 
 .modal-wide { width: 640px; }
 
-/* Discover results get bigger cells (see .discover-item below) than the
-   640px modal-wide default comfortably fits two columns of without
-   feeling squeezed. */
-.modal-discover { width: 720px; }
+/* Discovery uses a filter rail beside its result grid. */
+.modal-discover { width: 1200px; }
 
 .modal-header {
   font-family: var(--font-sans);
@@ -1749,13 +1741,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .dashboard-widget-toggle-row { margin: 0 0 4px; }
 
-:root[data-font-size="smaller"] { font-size: .92em; zoom: .92; }
-:root[data-font-size="small"] { font-size: .98em; zoom: .98; }
-:root[data-font-size="smaller"] { font-size: .92em; zoom: .92; }
-:root[data-font-size="small"] { font-size: .98em; zoom: .98; }
-:root[data-font-size="normal"] { font-size: 1.06em; zoom: 1.06; }
-:root[data-font-size="large"] { font-size: 1.2em; zoom: 1.22; }
-:root[data-font-size="larger"] { font-size: 1.34em; zoom: 1.38; }
+:root { --ui-zoom: 1; }
+:root[data-font-size="smaller"] { font-size: .92em; zoom: .92; --ui-zoom: .92; }
+:root[data-font-size="small"] { font-size: .98em; zoom: .98; --ui-zoom: .98; }
+:root[data-font-size="normal"] { font-size: 1.06em; zoom: 1.06; --ui-zoom: 1.06; }
+:root[data-font-size="large"] { font-size: 1.2em; zoom: 1.22; --ui-zoom: 1.22; }
+:root[data-font-size="larger"] { font-size: 1.34em; zoom: 1.38; --ui-zoom: 1.38; }
+/* Viewport units are measured before CSS zoom; keep panels inside the window. */
+#app { height: calc(100vh / var(--ui-zoom)); }
+.modal { max-width: calc(90vw / var(--ui-zoom)); max-height: calc(90vh / var(--ui-zoom)); }
 
 :root[data-reduced-motion="1"] *,
 :root[data-reduced-motion="1"] *::before,
@@ -2227,3 +2221,53 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .zero-viewer-card > a { width: 100%; }
 .zero-viewer-card img { display: block; width: 100%; height: auto; margin-bottom: 8px; }
+
+/* Toolbar controls size to their label, independent of full-width card buttons. */
+.topbar-actions { align-items: center; flex-wrap: wrap; width: auto; margin-left: auto; }
+.topbar-actions > .btn, .topbar-actions summary { flex: 0 0 auto; white-space: nowrap; line-height: 1.4; }
+.topbar-stats { flex-wrap: wrap; row-gap: 6px; }
+.stat { white-space: nowrap; }
+.main-header-controls, .roster-list-controls { min-width: 0; }
+.main-header-controls .btn { width: auto; flex: 0 0 auto; }
+.main-header-controls .btn, .main-header-sort { min-height: 36px; height: 36px; line-height: 1.4; }
+.main-header-controls .btn-icon { width: 36px; min-width: 36px; padding: 0; }
+.main-header-controls .density-toggle { height: 36px; }
+.main-header-controls .density-btn { min-height: 0; height: 100%; line-height: 1.4; }
+.main-header-sort { margin: 0; }
+.pagination { flex-wrap: wrap; }
+.tools-menu { position: relative; }
+.tools-menu summary { list-style: none; }
+.tools-menu summary::-webkit-details-marker { display: none; }
+.tools-menu-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 100; width: 220px; max-width: calc(100vw - 32px); padding: 8px; display: grid; gap: 6px; background: var(--bg-panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px #0005; }
+.tools-menu-panel .btn { text-align: left; width: 100%; }
+.filter-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-width: 0; }
+.filter-chips:empty { display: none; }
+.filter-chips .btn { width: auto; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+.filter-chip { background: var(--bg-panel-2); }
+.discovery-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.discovery-tabs [aria-selected="true"] { background: var(--accent); color: #fff; }
+.discovery-panel { display: grid; grid-template-columns: minmax(220px, 260px) minmax(0, 1fr); gap: 12px 20px; align-content: start; }
+.discovery-panel[hidden] { display: none; }
+.discovery-panel > .discover-form { grid-column: 1; grid-row: 1 / span 4; align-self: start; grid-template-columns: minmax(0, 1fr); }
+.discovery-panel > .filter-chips, .discovery-panel > .discover-history, .discovery-panel > #discoverSortRow, .discovery-panel > .discover-results { grid-column: 2; min-width: 0; }
+#discoveryPanelZero > .discover-form { grid-row: 2 / span 3; }
+.discovery-description { grid-column: 1 / -1; margin: 0; }
+#nobodyDiscoverStatus, #nobodyDiscoverResults { grid-column: 2; min-width: 0; }
+#nobodyDiscoverStatus { margin: 0; }
+.discovery-panel .discover-results, .zero-viewer-results { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 14px; max-height: none; overflow: visible; }
+.zero-viewer-card { background: var(--bg-panel); padding: 18px; border-radius: var(--radius); overflow: hidden; }
+.zero-viewer-card > a { color: var(--text-hi); text-decoration: none; }
+.discovery-panel .field-hint { color: var(--text-lo); }
+.discovery-panel .discovery-error { color: var(--signal-live); }
+.zero-viewer-card > * { min-width: 0; max-width: 100%; }
+.zero-viewer-card .card-username { white-space: normal; overflow-wrap: anywhere; }
+.zero-viewer-title { font-size: 12px; line-height: 1.5; color: var(--text-lo); }
+.zero-viewer-tags { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.zero-viewer-tags > span { font-size: 11px; line-height: 1.4; padding: 3px 6px; background: var(--bg-panel-2); border-radius: var(--radius-sm); max-width: 100%; overflow-wrap: anywhere; }
+.zero-viewer-card img { aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-sm); }
+.zero-viewer-card > .btn { margin-top: auto; }
+@media (max-width: 700px) {
+  .discovery-panel { grid-template-columns: minmax(0, 1fr); }
+  .discovery-panel > *, #nobodyDiscoverStatus, #nobodyDiscoverResults { grid-column: 1 !important; grid-row: auto !important; }
+  .main { padding: 16px; }
+}
