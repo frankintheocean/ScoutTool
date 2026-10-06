@@ -1,6 +1,6 @@
 # ScoutBot Standalone Windows App
 
-ScoutBot is the Scout module extracted from the Dashboard and packaged as a standalone Windows desktop application. The existing Scout frontend, FastAPI backend, Twitch tracking/discovery features, alerts, watchlists, VOD/clip downloader, settings, import/export behavior, changelog, local persistence, and native WebView2 presentation are retained.
+ScoutBot is a tool designed to help you find new Twitch streamers to watch, packaged as a standalone Windows desktop application. The existing Scout frontend, FastAPI backend, Twitch tracking/discovery features, alerts, watchlists, VOD/clip downloader, settings, import/export behavior, changelog, local persistence, and native WebView2 presentation are retained.
 
 ## Zero-viewer discovery
 
