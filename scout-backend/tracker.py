@@ -52,7 +52,7 @@ async def track_streamers():
 
             usernames = [s["username"] for s in streamers if s["username"]]
 
-            data_map = await get_bulk_streamer_data(usernames)
+            data_map = await get_bulk_streamer_data(usernames, expected_generation=generation)
 
             if not data_map:
                 logger.warning("Twitch returned no data")
@@ -107,7 +107,7 @@ async def track_streamers():
                         await asyncio.to_thread(add_event, username, "Stream started", _generation=generation)
 
                         if not await asyncio.to_thread(was_live_notified, username, _generation=generation):
-                            url = current["url"] or f"https://twitch.tv/{username}"
+                            url = f"https://twitch.tv/{data.get('username', username)}"
 
                             try:
                                 await send_live_notification(username, url, data)

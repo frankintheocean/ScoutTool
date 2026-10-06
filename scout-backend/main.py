@@ -24,12 +24,13 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, Response, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 import database as db
 import twitch_api
 import nobody_discovery
+import betterbanned
 from twitch_api import TwitchRateLimitedError
 import notifier
 import alerts
@@ -979,7 +980,7 @@ async def add_streamer(body: AddStreamerBody):
         )
 
     try:
-        data = await twitch_api.get_streamer_data(username)
+        data = await twitch_api.get_streamer_data(username, expected_generation=generation)
     except TwitchRateLimitedError as e:
         rate_limited(e)
     except Exception as e:
@@ -989,19 +990,27 @@ async def add_streamer(body: AddStreamerBody):
     if not data:
         raise HTTPException(status_code=404, detail=f"Twitch user '{username}' not found")
 
+    if data.get("user_id"):
+        owner = await asyncio.to_thread(db.find_twitch_identity_owner, str(data["user_id"]))
+        if owner:
+            raise HTTPException(status_code=409, detail=f"This Twitch account is already tracked as '{owner}'.")
+
     from datetime import datetime
 
-    await asyncio.to_thread(db.add_streamer, [
-        data["username"].lower(),
-        f"https://twitch.tv/{data['username']}",
-        data.get("profile_image"),
-        datetime.now().isoformat(),
-        data.get("category", "Unknown"),
-        data.get("followers", 0),
-        0,
-        data.get("live_viewers", 0),
-        data.get("live_status", "Offline"),
-    ], _generation=generation)
+    try:
+        await asyncio.to_thread(db.add_streamer, [
+            data["username"].lower(),
+            f"https://twitch.tv/{data['username']}",
+            data.get("profile_image"),
+            datetime.now().isoformat(),
+            data.get("category", "Unknown"),
+            data.get("followers", 0),
+            0,
+            data.get("live_viewers", 0),
+            data.get("live_status", "Offline"),
+        ], twitch_id=str(data["user_id"]) if data.get("user_id") else None, _generation=generation)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Kick off the bio/panel social-link scrape in the background rather
     # than awaiting it here — it's a separate, best-effort GraphQL call
@@ -1060,7 +1069,7 @@ async def refresh_streamer(username: str):
         not_found(username)
 
     try:
-        data = await twitch_api.get_streamer_data(username)
+        data = await twitch_api.get_streamer_data(username, expected_generation=generation)
     except TwitchRateLimitedError as e:
         rate_limited(e)
     except Exception as e:
@@ -1087,6 +1096,135 @@ async def refresh_streamer(username: str):
 
     row = await asyncio.to_thread(db.get_streamer, username)
     return streamer_to_dict(row, await asyncio.to_thread(db.get_streamer_metadata, username))
+
+
+class TwitchIdentityBody(BaseModel):
+    twitch_id: str = Field(pattern=r"^[1-9][0-9]{0,19}\z", max_length=20)
+
+
+class PreviousUsernameBody(BaseModel):
+    username: str = Field(min_length=1, max_length=26, pattern=r"^@?[A-Za-z0-9_]{1,25}\z")
+
+
+class CopiedActivityBody(BaseModel):
+    text: str = Field(min_length=1, max_length=betterbanned.MAX_TEXT)
+    provider_username: str = Field(pattern=r'^[A-Za-z0-9_]{1,25}\z')
+
+
+@app.get('/api/streamers/{username}/activity')
+def streamer_activity(username: str):
+    result = db.get_activity_snapshot(username)
+    if result is None:
+        not_found(username)
+    return result
+
+
+async def _save_activity(username, copied=None):
+    identities, generation = await asyncio.to_thread(db.get_twitch_identity_snapshot, [username])
+    identity = identities.get(username.lower())
+    if identity is None:
+        not_found(username)
+    login = identity['current_username'] or username.lower()
+    try:
+        previous = await asyncio.to_thread(db.get_activity_snapshot, username, _generation=generation)
+        expected = previous['snapshot']['retrieved_at'] if previous and previous['snapshot'] else None
+        if copied is not None:
+            if copied.provider_username.lower() != login:
+                raise HTTPException(status_code=409, detail='The channel username changed. Reopen its details and copy the current channel page.')
+            payload = await asyncio.to_thread(betterbanned.parse_activity, copied.text)
+        else:
+            payload = await shared_search(lambda: betterbanned.fetch_activity(login), cache=False,
+                                          source='betterbanned-activity', params={'username':login})
+        return await asyncio.to_thread(db.save_activity_snapshot, username, login, payload,
+                                       'copied' if copied is not None else 'fetched', expected_retrieved_at=expected, _generation=generation)
+    except betterbanned.ProviderError as exc:
+        raise HTTPException(status_code=422 if copied is not None else 502, detail=str(exc)) from exc
+    except db.StaleDatabaseOperationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post('/api/streamers/{username}/activity/refresh')
+async def refresh_streamer_activity(username: str):
+    return await _save_activity(username)
+
+
+@app.post('/api/streamers/{username}/activity/copied')
+async def copy_streamer_activity(username: str, body: CopiedActivityBody):
+    return await _save_activity(username, body)
+
+
+@app.get("/api/streamers/{username}/identity")
+def streamer_identity(username: str):
+    identity = db.get_username_identity(username)
+    if identity is None:
+        not_found(username)
+    return identity
+
+
+async def _check_streamer_identity(username, supplied_id=None):
+    snapshot, generation = await asyncio.to_thread(db.get_twitch_identity_snapshot, [username])
+    row = snapshot.get(username.lower())
+    if row is None:
+        not_found(username)
+    saved = row['twitch_id']
+    if supplied_id and saved and supplied_id != saved:
+        raise HTTPException(status_code=409, detail="This streamer already has a different Twitch ID. IDs do not change on rename.")
+    twitch_id = supplied_id or saved
+    params = {'id':twitch_id} if twitch_id else {'login':username.lower()}
+    try:
+        result = await shared_search(lambda: twitch_api.twitch_request('users', params), cache=False, source='identity-check', params=params)
+    except TwitchRateLimitedError as exc:
+        rate_limited(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Could not reach Twitch to check this account. Try again.") from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Twitch lookup failed. Existing identity and history were preserved.")
+    if not isinstance(result, dict) or not isinstance(result.get('data'), list):
+        raise HTTPException(status_code=502, detail="Twitch returned an invalid account response. No identity was changed.")
+    if not result['data']:
+        raise HTTPException(status_code=404, detail="Twitch returned no account for this ID or username. This does not establish whether it was renamed, deleted, or suspended.")
+    user = result['data'][0]
+    try:
+        db._validated_identity(user['id'], user['login'])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Twitch returned invalid account details. No identity was changed.") from exc
+    if twitch_id and str(user.get('id')) != twitch_id:
+        raise HTTPException(status_code=502, detail="Twitch returned a different account ID. No identity was changed.")
+    try:
+        identity = await asyncio.to_thread(db.save_twitch_identity, username.lower(), str(user['id']), user['login'], _generation=generation)
+    except db.StaleDatabaseOperationError as exc:
+        raise HTTPException(status_code=409, detail="The database changed while checking. Try again.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # A fresh manual check must replace older cached login information.
+    twitch_api.identity_user_cache.pop(str(user['id']), None)
+    invalidate_discover_cache()
+    return identity
+
+
+@app.post("/api/streamers/{username}/identity/check")
+async def check_streamer_identity(username: str):
+    return await _check_streamer_identity(username)
+
+
+@app.put("/api/streamers/{username}/identity")
+async def save_streamer_identity(username: str, body: TwitchIdentityBody):
+    return await _check_streamer_identity(username, body.twitch_id)
+
+
+@app.post("/api/streamers/{username}/identity/history")
+def add_streamer_previous_username(username: str, body: PreviousUsernameBody):
+    try:
+        return db.add_previous_username(username, body.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/streamers/{username}/identity/history/{history_id}")
+def remove_streamer_previous_username(username: str, history_id: int):
+    if not db.remove_previous_username(username, history_id):
+        raise HTTPException(status_code=404, detail="Manual history entry not found. Confirmed observations cannot be deleted here.")
+    return db.get_username_identity(username)
 
 
 # ==========================
@@ -1228,6 +1366,12 @@ async def scrape_all_social_links():
     transiently fail."""
     rows, generation = await asyncio.to_thread(db.get_tracking_snapshot)
     usernames = [row["username"] for row in rows]
+    # Populate the short-lived per-ID cache in batches before worker scraping.
+    try:
+        await twitch_api.get_tracked_users(usernames, expected_generation=generation)
+    except Exception:
+        logger.warning('Bulk identity prefetch failed; continuing individual social scrapes', exc_info=True)
+
 
     async def _scrape_one(username):
         try:
@@ -1590,9 +1734,10 @@ async def discover_zero_viewers(
     # A blacklist or database import may change while the provider is awaited.
     denied = await asyncio.to_thread(db.get_blacklist_set)
     items = [dict(item) for item in items if item["username"] not in denied]
-    tracked = await asyncio.to_thread(db.streamers_exist_bulk, [item["username"] for item in items])
+    tracked = await asyncio.to_thread(db.get_tracked_identity_names, [item["username"] for item in items])
     for item in items:
         item["already_tracked"] = item["username"] in tracked
+        item["tracked_username"] = tracked.get(item["username"])
     return {"items": items, "source": "nobody.live"}
 
 
@@ -1670,10 +1815,13 @@ async def discover(
     # one streamer_exists() + one get_streamer_metadata() call per result
     # (each its own query) — keeps this to one DB round trip regardless
     # of how many results come back.
-    tracked_locations = await asyncio.to_thread(db.get_tracked_locations_bulk, [r["username"] for r in results])
+    tracked_names = await asyncio.to_thread(db.get_tracked_identity_names, [r['username'] for r in results])
+    tracked_locations = await asyncio.to_thread(db.get_tracked_locations_bulk, list(tracked_names.values()))
     for r in results:
-        r["already_tracked"] = r["username"] in tracked_locations
-        r["location"] = tracked_locations.get(r["username"], "")
+        key = tracked_names.get(r['username'])
+        r["already_tracked"] = key is not None
+        r["tracked_username"] = key
+        r["location"] = tracked_locations.get(key, "")
 
     payload = {"items": results, "next_cursor": next_cursor}
 
@@ -1983,11 +2131,12 @@ async def _run_category_watch_check(category: str, watch, limit: int = 25):
     # only on a manual click, so N-queries-per-check adds up fast with
     # several watchlists configured on a short interval. One batched
     # lookup instead.
-    tracked = await asyncio.to_thread(db.streamers_exist_bulk, current_usernames)
+    tracked = await asyncio.to_thread(db.get_tracked_identity_names, current_usernames)
 
     for r in results:
         uname = (r.get("username") or "").lower()
         r["already_tracked"] = uname in tracked
+        r["tracked_username"] = tracked.get(uname)
         r["is_new"] = uname not in previously_seen
 
     await asyncio.to_thread(db.update_category_watch_seen, category, sorted(current_usernames))

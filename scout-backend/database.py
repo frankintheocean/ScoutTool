@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # Pinned to this file's own directory when running from source (same
@@ -193,6 +193,9 @@ def migrate_database(con):
 
     migrations = {
 
+        "twitch_id": "TEXT",
+        "current_username": "TEXT",
+        "identity_checked_at": "TEXT",
         "profile_image": "TEXT",
 
         "discovered": "TEXT",
@@ -476,6 +479,26 @@ def setup(con=None):
 
 
     migrate_database(con)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_streamers_twitch_id ON streamers(twitch_id) WHERE twitch_id IS NOT NULL")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_streamers_current_username ON streamers(current_username)")
+    con.execute("""CREATE TABLE IF NOT EXISTS streamer_username_history(
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        previous_username TEXT NOT NULL,
+        new_username TEXT,
+        source TEXT NOT NULL CHECK(source IN ('observed','manual')),
+        observed_at TEXT,
+        recorded_at TEXT NOT NULL
+    )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_username_history_owner ON streamer_username_history(username,id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_username_history_manual ON streamer_username_history(username,previous_username) WHERE source='manual'")
+    con.execute("""CREATE TABLE IF NOT EXISTS streamer_activity(
+        username TEXT PRIMARY KEY,
+        provider_username TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('fetched','copied')),
+        retrieved_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+    )""")
 
 
 
@@ -1088,9 +1111,11 @@ def setup_fts(con):
     except sqlite3.OperationalError:
         existing = []
     required = ["username", "notes", "alias", "category", "location", "tags"]
+    old_trigger = con.execute("SELECT sql FROM sqlite_master WHERE name='trg_streamers_fts_au'").fetchone()
+    identity_index_old = bool(old_trigger and "current_username" not in old_trigger[0])
     schema = con.execute("SELECT sql FROM sqlite_master WHERE name='streamers_fts'").fetchone()
     old_contentless = bool(schema and re.search(r"content\s*=\s*['\"]['\"]", schema[0], re.I))
-    rebuild = not existing or existing != required or old_contentless
+    rebuild = not existing or existing != required or old_contentless or identity_index_old
     triggers = ("trg_streamers_fts_ai", "trg_streamers_fts_ad", "trg_streamers_fts_au",
                 "trg_metadata_fts_alias_ai", "trg_metadata_fts_alias_au", "trg_metadata_fts_ad")
     for name in triggers:
@@ -1109,11 +1134,11 @@ def setup_fts(con):
     # A content-backed table makes deletes independent of token snapshots.
     # Metadata deletion, scraped-location changes and missing metadata all
     # update the same index entry; reused streamer ids cannot inherit tokens.
-    select_new = """SELECT new.id,new.username,COALESCE(new.notes,''),COALESCE(m.alias,''),
+    select_new = """SELECT new.id,new.username || ' ' || COALESCE(new.current_username,''),COALESCE(new.notes,''),COALESCE(m.alias,''),
                     COALESCE(new.category,''),COALESCE(m.resolved_location,''),COALESCE(m.tags,'')
                     FROM streamers s LEFT JOIN streamer_metadata m ON m.username=s.username
                     WHERE s.id=new.id"""
-    select_meta = """SELECT s.id,s.username,COALESCE(s.notes,''),COALESCE(m.alias,''),
+    select_meta = """SELECT s.id,s.username || ' ' || COALESCE(s.current_username,''),COALESCE(s.notes,''),COALESCE(m.alias,''),
                     COALESCE(s.category,''),COALESCE(m.resolved_location,''),COALESCE(m.tags,'')
                     FROM streamers s LEFT JOIN streamer_metadata m ON m.username=s.username
                     WHERE s.username={username}"""
@@ -1125,7 +1150,7 @@ def setup_fts(con):
         CREATE TRIGGER trg_streamers_fts_ad AFTER DELETE ON streamers BEGIN
             DELETE FROM streamers_fts WHERE rowid=old.id;
         END;
-        CREATE TRIGGER trg_streamers_fts_au AFTER UPDATE OF username,notes,category ON streamers BEGIN
+        CREATE TRIGGER trg_streamers_fts_au AFTER UPDATE OF username,current_username,notes,category ON streamers BEGIN
             DELETE FROM streamers_fts WHERE rowid=old.id;
             INSERT INTO streamers_fts({fields}) {select_new};
         END;
@@ -1168,7 +1193,7 @@ def rebuild_fts_index(con=None):
     con.execute(
         """
         INSERT INTO streamers_fts(rowid, username, notes, alias, category, location, tags)
-        SELECT s.id, s.username, COALESCE(s.notes, ''),
+        SELECT s.id, s.username || ' ' || COALESCE(s.current_username,''), COALESCE(s.notes, ''),
                COALESCE(m.alias, ''), COALESCE(s.category, ''),
                COALESCE(m.resolved_location, ''), COALESCE(m.tags, '')
         FROM streamers s
@@ -1207,7 +1232,7 @@ def _fts_match_expr(query):
 # ==========================
 
 @_database_operation
-def add_streamer(data):
+def add_streamer(data, twitch_id=None):
 
     data = list(data)
     data[0] = data[0].lower()
@@ -1270,6 +1295,10 @@ def add_streamer(data):
         )
         if inserted.rowcount:
             con.execute("UPDATE streamers SET manual_raid_score=COALESCE(raid_score,0) WHERE username=?", (data[0],))
+            if twitch_id is not None:
+                numeric_id, login = _validated_identity(twitch_id, data[0])
+                if not _observe_identity(con, data[0], numeric_id, login, datetime.now(timezone.utc).isoformat()):
+                    raise ValueError("This Twitch ID is already tracked under another username.")
 
 
     _invalidate_all_cache()
@@ -1481,10 +1510,10 @@ def search_streamers(
         params.append(_fts_match_expr(query))
     elif query:
         clauses.append(
-            "(LOWER(s.username) LIKE ? OR LOWER(m.alias) LIKE ? OR LOWER(s.notes) LIKE ?)"
+            "(LOWER(s.username) LIKE ? OR LOWER(s.current_username) LIKE ? OR LOWER(m.alias) LIKE ? OR LOWER(s.notes) LIKE ?)"
         )
         needle = f"%{query.lower().strip()}%"
-        params.extend([needle, needle, needle])
+        params.extend([needle, needle, needle, needle])
 
     if category:
         clauses.append("LOWER(s.category) LIKE ?")
@@ -1614,6 +1643,9 @@ def remove_streamer(username):
     username = username.lower()
 
     tables = [
+
+        "streamer_username_history",
+        "streamer_activity",
 
         "viewer_history",
 
@@ -5122,3 +5154,158 @@ def get_tracking_snapshot():
 @_database_operation
 def get_total_count():
     return db().execute("SELECT COUNT(*) FROM streamers").fetchone()[0]
+
+
+# Twitch IDs anchor identity; existing username keys stay stable for all local data.
+def _validated_identity(twitch_id, login):
+    if not isinstance(twitch_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", twitch_id):
+        raise ValueError("Twitch ID must be a positive numeric string (up to 20 digits).")
+    login = str(login).strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
+        raise ValueError("Invalid Twitch username.")
+    return twitch_id, login
+
+
+@_database_operation
+def get_twitch_identity_snapshot(usernames):
+    result = {}
+    names = list(dict.fromkeys(name.lower() for name in usernames))
+    con = db()
+    for offset in range(0, len(names), 500):
+        batch = names[offset:offset + 500]
+        rows = con.execute(f"SELECT username,twitch_id,current_username,identity_checked_at FROM streamers WHERE username IN ({','.join('?' for _ in batch)})", batch)
+        result.update({row['username']: dict(row) for row in rows})
+    return result, database_generation
+
+
+def _observe_identity(con, username, twitch_id, login, now):
+    row = con.execute("SELECT twitch_id,current_username FROM streamers WHERE username=?", (username,)).fetchone()
+    if row is None:
+        return True  # An untracked lookup has no persistent record yet.
+    if row['twitch_id'] and row['twitch_id'] != twitch_id:
+        return False  # Never silently rebind a record to a reused username.
+    if row['twitch_id'] == twitch_id and row['current_username'] == login:
+        # Avoid rewriting the FTS index and URL for unchanged identities.
+        con.execute('UPDATE streamers SET identity_checked_at=? WHERE username=?', (now, username))
+        return True
+    owner = con.execute("SELECT username FROM streamers WHERE twitch_id=? AND username!=?", (twitch_id, username)).fetchone()
+    if owner:
+        return False
+    previous = row['current_username'] or username
+    if previous != login:
+        source = 'observed' if row['twitch_id'] else 'manual'
+        if source == 'manual':
+            con.execute("INSERT OR IGNORE INTO streamer_username_history(username,previous_username,source,recorded_at) VALUES(?,?,'manual',?)", (username, previous, now))
+        else:
+            con.execute("INSERT INTO streamer_username_history(username,previous_username,new_username,source,observed_at,recorded_at) VALUES(?,?,?,'observed',?,?)", (username, previous, login, now, now))
+    con.execute("UPDATE streamers SET twitch_id=?,current_username=?,identity_checked_at=?,url=? WHERE username=?", (twitch_id, login, now, 'https://twitch.tv/' + login, username))
+    return True
+
+
+@_database_operation
+def observe_twitch_identities(users, expected_identities=None):
+    """Apply a whole lookup batch atomically, avoiding one commit per streamer."""
+    accepted = set()
+    now = datetime.now(timezone.utc).isoformat()
+    with db() as con:
+        for username, user in users.items():
+            if expected_identities is not None:
+                current = con.execute('SELECT username,twitch_id,current_username,identity_checked_at FROM streamers WHERE username=?', (username.lower(),)).fetchone()
+                if (dict(current) if current else None) != expected_identities.get(username.lower()):
+                    continue
+            twitch_id, login = _validated_identity(user['user_id'], user['username'])
+            if _observe_identity(con, username.lower(), twitch_id, login, now):
+                accepted.add(username.lower())
+    _invalidate_all_cache()
+    return accepted
+
+
+@_database_operation
+def save_twitch_identity(username, twitch_id, login):
+    twitch_id, login = _validated_identity(twitch_id, login)
+    if not streamer_exists(username):
+        raise ValueError("Streamer is no longer tracked.")
+    accepted = observe_twitch_identities({username: {'user_id':twitch_id, 'username':login}})
+    if username.lower() not in accepted:
+        raise ValueError("That Twitch ID belongs to another tracked record, or differs from this record's saved ID. IDs do not change when usernames change.")
+    return get_username_identity(username)
+
+
+@_database_operation
+def get_username_identity(username):
+    row = get_streamer(username)
+    if row is None:
+        return None
+    history = db().execute("SELECT id,previous_username,new_username,source,observed_at,recorded_at FROM streamer_username_history WHERE username=? ORDER BY id DESC LIMIT 500", (username.lower(),)).fetchall()
+    return {'twitch_id':row['twitch_id'], 'current_username':row['current_username'] or row['username'],
+            'checked_at':row['identity_checked_at'], 'history':[dict(entry) for entry in history]}
+
+
+@_database_operation
+def add_previous_username(username, previous_username):
+    if not streamer_exists(username):
+        raise ValueError("Streamer is no longer tracked.")
+    name = str(previous_username).strip().lower().lstrip('@')
+    if not re.fullmatch(r"[a-z0-9_]{1,25}", name):
+        raise ValueError("Previous username must contain 1–25 letters, digits, or underscores.")
+    row = get_streamer(username)
+    if name == (row['current_username'] or row['username']):
+        raise ValueError("That is the current username, not a previous one.")
+    now = datetime.now(timezone.utc).isoformat()
+    with db() as con:
+        con.execute("INSERT OR IGNORE INTO streamer_username_history(username,previous_username,source,recorded_at) VALUES(?,?,'manual',?)", (username.lower(), name, now))
+    return get_username_identity(username)
+
+
+@_database_operation
+def remove_previous_username(username, history_id):
+    with db() as con:
+        return bool(con.execute("DELETE FROM streamer_username_history WHERE username=? AND id=? AND source='manual'", (username.lower(), history_id)).rowcount)
+
+
+@_database_operation
+def find_twitch_identity_owner(twitch_id):
+    row = db().execute("SELECT username FROM streamers WHERE twitch_id=?", (twitch_id,)).fetchone()
+    return row['username'] if row else None
+
+
+@_database_operation
+def get_activity_snapshot(username):
+    identity = get_username_identity(username)
+    if identity is None:
+        return None
+    row = db().execute('SELECT * FROM streamer_activity WHERE username=?', (username.lower(),)).fetchone()
+    return {'current_username': identity['current_username'], 'snapshot':
+            {**json.loads(row['payload']), 'provider_username': row['provider_username'],
+             'source_type': row['source_type'], 'retrieved_at': row['retrieved_at']} if row else None}
+
+
+@_database_operation
+def save_activity_snapshot(username, provider_username, payload, source_type, expected_retrieved_at=None):
+    identity = get_username_identity(username)
+    if identity is None or identity['current_username'] != provider_username:
+        raise StaleDatabaseOperationError('The channel changed during this lookup. Retry for the current username.')
+    existing = db().execute('SELECT retrieved_at FROM streamer_activity WHERE username=?', (username.lower(),)).fetchone()
+    if (existing['retrieved_at'] if existing else None) != expected_retrieved_at:
+        raise StaleDatabaseOperationError('Newer activity was saved while this request was running. Reopen the details before retrying.')
+    with db() as con:
+        con.execute('''INSERT INTO streamer_activity(username,provider_username,source_type,retrieved_at,payload)
+            VALUES(?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+            provider_username=excluded.provider_username,source_type=excluded.source_type,
+            retrieved_at=excluded.retrieved_at,payload=excluded.payload''',
+            (username.lower(), provider_username, source_type, datetime.now(timezone.utc).isoformat(), json.dumps(payload)))
+    return get_activity_snapshot(username)
+
+
+@_database_operation
+def get_tracked_identity_names(usernames):
+    """Map current public names to immutable local record keys for discovery actions."""
+    names = list(dict.fromkeys(u.lower() for u in usernames))
+    result = {}
+    con = db()
+    for offset in range(0,len(names),400):
+        batch = names[offset:offset+400]
+        marks = ','.join('?' for _ in batch)
+        rows = con.execute(f"SELECT username,current_username FROM streamers WHERE COALESCE(current_username,username) IN ({marks})",batch)
+        result.update({row['current_username'] or row['username']:row['username'] for row in rows})
+    return result

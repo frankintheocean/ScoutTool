@@ -132,7 +132,7 @@ async def check_streamer_live_rules(username, data):
         "body": f"{data.get('display_name', username)} is now live in {data.get('category', 'Unknown')} with {data.get('live_viewers', 0)} viewers.",
         "category": data.get("category", "Unknown"),
         "live_viewers": data.get("live_viewers", 0),
-        "url": f"https://twitch.tv/{username}",
+        "url": f"https://twitch.tv/{data.get('username', username)}",
     }
 
     for rule in rules:

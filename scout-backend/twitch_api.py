@@ -43,6 +43,7 @@ def set_credentials(client_id, client_secret):
     access_token = None
     token_expiry = 0
     follower_cache.clear()
+    identity_user_cache.clear()
     _search_pages.clear()
     invalidate_discover_cache()
 
@@ -67,6 +68,7 @@ token_lock = asyncio.Lock()
 session_lock = asyncio.Lock()
 
 user_cache = {}       # username -> {"data": {...}, "timestamp": ...}
+identity_user_cache = {}  # numeric ID -> full public user, 30-second TTL
 follower_cache = {}   # user_id -> {"value": int, "timestamp": ...}
 category_cache = {}   # category name (lower) -> {"value": game_id, "timestamp": ...}
 
@@ -304,6 +306,18 @@ def cache_valid(entry, expiry):
 async def get_user_id(username):
     username = username.lower()
 
+    identities, generation = await asyncio.to_thread(db.get_twitch_identity_snapshot, [username])
+    saved = identities.get(username, {}).get("twitch_id")
+    if saved:
+        users = await get_users_by_id([saved])
+        user = users.get(saved)
+        if not user:
+            logger.warning("Twitch ID %s unavailable for tracked streamer %s", saved, username)
+            return None
+        data = _identity_user(user)
+        accepted = await asyncio.to_thread(db.observe_twitch_identities, {username:data}, expected_identities=identities, _generation=generation)
+        return data if username in accepted else None
+
     cached = user_cache.get(username)
     if cached and cache_valid(cached, USER_CACHE_TIME):
         return cached["data"]
@@ -315,6 +329,7 @@ async def get_user_id(username):
         return None
 
     user = response["data"][0]
+    _store_cache(identity_user_cache, str(user["id"]), {"value":user, "timestamp":time.time()}, 30)
 
     data = {
         "user_id": user["id"],
@@ -426,6 +441,7 @@ async def get_bulk_users(usernames):
             continue
 
         for user in response.get("data", []):
+            _store_cache(identity_user_cache, str(user["id"]), {"value":user, "timestamp":time.time()}, 30)
             data = {
                 "user_id": user["id"],
                 "username": user["login"],
@@ -444,8 +460,33 @@ async def get_bulk_users(usernames):
 # BULK STREAMER DATA
 # ==========================
 
-async def get_bulk_streamer_data(usernames):
-    users = await get_bulk_users(usernames)
+def _identity_user(user):
+    return {"user_id":str(user['id']), "username":user['login'].lower(),
+            "display_name":user.get('display_name') or user['login'],
+            "profile_image":user.get('profile_image_url', '')}
+
+
+async def get_tracked_users(usernames, expected_generation=None):
+    """Resolve tracked accounts by stable ID; bootstrap legacy records by login."""
+    identities, generation = await asyncio.to_thread(db.get_twitch_identity_snapshot, usernames)
+    if expected_generation is not None and generation != expected_generation:
+        return {}
+    saved = {name:row['twitch_id'] for name,row in identities.items() if row['twitch_id']}
+    users = await get_bulk_users([name for name in usernames if name.lower() not in saved])
+    ids = {**{name:user['user_id'] for name,user in users.items()}, **saved}
+    if ids:
+        by_id = await get_users_by_id(list(dict.fromkeys(ids.values())))
+        users = {name:_identity_user(by_id[twitch_id]) for name,twitch_id in ids.items() if twitch_id in by_id}
+        # A missing ID never falls back to a possibly reused username.
+    try:
+        accepted = await asyncio.to_thread(db.observe_twitch_identities, users, expected_identities=identities, _generation=generation)
+    except db.StaleDatabaseOperationError:
+        return {}
+    return {key:{**user, 'tracking_username':key} for key,user in users.items() if key in accepted}
+
+
+async def get_bulk_streamer_data(usernames, expected_generation=None):
+    users = await get_tracked_users(usernames, expected_generation)
     if not users:
         return {}
 
@@ -480,7 +521,7 @@ async def get_bulk_streamer_data(usernames):
         for user in batch:
             count = viewers.get(user["user_id"], 0)
 
-            results[user["username"].lower()] = {
+            results[user.get("tracking_username", user["username"]).lower()] = {
                 "username": user["username"],
                 "display_name": user["display_name"],
                 "profile_image": user["profile_image"],
@@ -500,8 +541,8 @@ async def get_bulk_streamer_data(usernames):
 # SINGLE STREAMER COMPATIBILITY
 # ==========================
 
-async def get_streamer_data(username):
-    data = await get_bulk_streamer_data([username])
+async def get_streamer_data(username, expected_generation=None):
+    data = await get_bulk_streamer_data([username], expected_generation)
     return data.get(username.lower())
 
 
@@ -560,21 +601,26 @@ async def get_category_id(name):
 
 async def get_users_by_id(user_ids):
     results = {}
-
-    for i in range(0, len(user_ids), MAX_BATCH_SIZE):
-        batch = user_ids[i:i + MAX_BATCH_SIZE]
+    missing = []
+    for uid in dict.fromkeys(str(uid) for uid in user_ids):
+        cached = identity_user_cache.get(uid)
+        if cached and cache_valid(cached, 30):
+            results[uid] = cached['value']
+        else:
+            missing.append(uid)
+    for i in range(0, len(missing), MAX_BATCH_SIZE):
+        batch = missing[i:i + MAX_BATCH_SIZE]
         params = [("id", uid) for uid in batch]
-
         response = await shared_search(
             lambda: twitch_request("users", params), source="twitch-search-users",
             params=params, client_id=CLIENT_ID,
         )
         if not response:
             continue
-
         for user in response.get("data", []):
-            results[user["id"]] = user
-
+            uid = str(user['id'])
+            results[uid] = user
+            _store_cache(identity_user_cache, uid, {"value":user,"timestamp":time.time()}, 30)
     return results
 
 
@@ -1703,7 +1749,7 @@ async def get_channel_social(username):
         # pulled from urls (bio, panels, and recognized-platform Social
         # Links) — an earlier version of this assignment replaced the
         # dict outright and would have silently dropped them.
-        classified = _extract_social_links(urls, self_username=username)
+        classified = _extract_social_links(urls, self_username=user_info["username"])
         for label, url in classified.items():
             result["social_links"].setdefault(label, url)
 
