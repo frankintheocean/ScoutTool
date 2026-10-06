@@ -1462,6 +1462,7 @@ function manualSocialLine(s) {
 // bookmarked link that predates a WEB_HOST change, so this covers that
 // without needing the hostname to match exactly.
 function twitchEmbedUrl(username) {
+  username = state.items.find(item => item.username === username)?.current_username || username;
   const parents = new Set([location.hostname || "localhost", "localhost", "127.0.0.1"]);
   const parentParams = [...parents].map(p => `parent=${encodeURIComponent(p)}`).join("&");
   return `https://player.twitch.tv/?channel=${encodeURIComponent(username)}&${parentParams}&muted=true&autoplay=true`;
@@ -1568,7 +1569,7 @@ function cardHtml(s) {
         <div class="card-identity">
           <div class="card-username">
             ${isLive ? '<span class="live-dot"></span>' : ""}
-            ${escapeHtml(s.alias || s.username)}
+            ${escapeHtml(s.alias || s.current_username || s.username)}
             ${s.favourite ? '<span class="fav-star">★</span>' : ""}
           </div>
           <div class="card-category">${escapeHtml(s.category || "Unknown")}</div>
@@ -1939,7 +1940,7 @@ function dashboardListHtml(items, emptyMessage, emptyAction) {
   return `<div class="dashboard-widget-list">${items.map(s => `
     <div class="dashboard-widget-row" data-dash-username="${escapeAttr(s.username)}">
       ${s.live_status === "Live" ? '<span class="live-dot"></span>' : '<span class="dashboard-dot-spacer"></span>'}
-      <span class="dashboard-widget-row-name">${escapeHtml(s.alias || s.username)}</span>
+      <span class="dashboard-widget-row-name">${escapeHtml(s.alias || s.current_username || s.username)}</span>
       <span class="dashboard-widget-row-meta">${formatCompact(s.followers)} followers</span>
     </div>`).join("")}</div>`;
 }
@@ -2563,7 +2564,7 @@ async function selectStreamer(username) {
 function recentlyViewedItemHtml(s) {
   return `
     <div class="preset-item" data-select-username="${escapeAttr(s.username)}">
-      <span class="preset-name">${escapeHtml(s.alias || s.username)}</span>
+      <span class="preset-name">${escapeHtml(s.alias || s.current_username || s.username)}</span>
       <span class="preset-name" style="flex:none;color:var(--text-dim);font-size:11px;">${escapeHtml(s.category || "")}</span>
     </div>`;
 }
@@ -2592,7 +2593,7 @@ document.getElementById("btnRefreshRecentlyViewed").addEventListener("click", lo
 function suggestionItemHtml(s) {
   return `
     <div class="preset-item" data-select-username="${escapeAttr(s.username)}">
-      <span class="preset-name">${escapeHtml(s.alias || s.username)}</span>
+      <span class="preset-name">${escapeHtml(s.alias || s.current_username || s.username)}</span>
       <span class="preset-name" style="flex:none;color:var(--text-dim);font-size:11px;">${escapeHtml(s.category || "")}</span>
     </div>`;
 }
@@ -2647,7 +2648,7 @@ function renderDetail(s) {
       <div style="flex:1;min-width:0;">
         <div class="detail-name">
           ${isLive ? '<span class="live-dot"></span>' : ""}
-          ${escapeHtml(s.alias || s.username)}
+          ${escapeHtml(s.alias || s.current_username || s.username)}
         </div>
         <div class="detail-cat">${escapeHtml(s.category || "Unknown")} &middot; ${s.live_status}${s.scraped_age ? ` &middot; 🎂 ${s.scraped_age}` : ""}</div>
         ${locationLine}
@@ -2662,7 +2663,8 @@ function renderDetail(s) {
       <button class="icon-btn ${s.notify_enabled ? "" : "active"}" id="detailNotify">${s.notify_enabled ? "🔔 Notify on" : "🔕 Muted"}</button>
       <button class="icon-btn" id="detailRefresh">↻ Refresh</button>
       <button class="icon-btn" id="detailVods">⬇️ VODs & Clips</button>
-      <a class="icon-btn" style="text-decoration:none;display:inline-block;" href="${escapeAttr(s.url || `https://twitch.tv/${s.username}`)}" target="_blank" rel="noopener">Open on Twitch ↗</a>
+      <a id="detailTwitchLink" class="icon-btn" style="text-decoration:none;display:inline-block;" href="${escapeAttr(s.url || `https://twitch.tv/${s.username}`)}" target="_blank" rel="noopener">Open on Twitch ↗</a>
+      <a id="detailBetterBannedLink" class="icon-btn" style="text-decoration:none;display:inline-block;" href="https://betterbanned.com/en/streamer/${escapeAttr(encodeURIComponent(s.current_username || s.username))}" target="_blank" rel="noopener noreferrer">Open user in BetterBanned ↗</a>
       ${s.x_url ? `<a class="icon-btn" style="text-decoration:none;display:inline-block;" href="${escapeAttr(s.x_url)}" target="_blank" rel="noopener">X ↗</a>` : ""}
       ${s.instagram_url ? `<a class="icon-btn" style="text-decoration:none;display:inline-block;" href="${escapeAttr(s.instagram_url)}" target="_blank" rel="noopener">Instagram ↗</a>` : ""}
       ${s.youtube_url ? `<a class="icon-btn" style="text-decoration:none;display:inline-block;" href="${escapeAttr(s.youtube_url)}" target="_blank" rel="noopener">YouTube ↗</a>` : ""}
@@ -2692,6 +2694,41 @@ function renderDetail(s) {
         <select class="priority-select" id="detailSessionPicker" style="margin-bottom:8px;"></select>
         <div id="detailSessionCurve"></div>
       </div>
+    </div>
+
+    <div class="detail-section" id="detailIdentitySection">
+      <div class="detail-section-title">Twitch identity &amp; username history</div>
+      <div class="detail-sublabel">Current username: <strong id="detailCurrentUsername">${escapeHtml(s.current_username || s.username)}</strong></div>
+      <label class="field-label" for="detailTwitchId">Numeric Twitch ID</label>
+      <input id="detailTwitchId" class="field-input" type="text" inputmode="numeric" maxlength="20" placeholder="Saved automatically when resolved" value="${escapeAttr(s.twitch_id || "")}">
+      <div class="identity-actions">
+        <button id="detailSaveTwitchId" class="btn btn-ghost btn-small" type="button">Save ID</button>
+        <button id="detailCheckUsername" class="btn btn-ghost btn-small" type="button">Check username</button>
+      </div>
+      <div id="detailIdentityStatus" class="notes-hint" role="status" aria-live="polite"></div>
+      <div class="notes-hint">Saved IDs identify the same account after a rename. Automatic checks run with the tracker every 10 minutes. Twitch does not provide earlier username history; add known older names below as unverified history.</div>
+      <label class="field-label" for="detailPreviousUsername">Known previous username</label>
+      <input id="detailPreviousUsername" class="field-input" maxlength="26" placeholder="A username from before tracking">
+      <button id="detailAddPreviousUsername" class="btn btn-ghost btn-small" type="button" style="margin-top:6px;">Add previous name</button>
+      <div id="detailUsernameHistory" class="identity-history">Loading history…</div>
+    </div>
+
+    <div class="detail-section" id="detailActivitySection">
+      <div class="detail-section-title">BetterBanned activity &amp; bans</div>
+      <div class="identity-actions">
+        <button id="detailActivityRefresh" class="btn btn-ghost btn-small" type="button">Refresh from BetterBanned</button>
+        <label>Show <select id="detailActivityFilter" class="priority-select"><option value="all">Recent activity</option><option value="bans">Ban history</option></select></label>
+      </div>
+      <div id="detailActivityStatus" class="notes-hint" role="status" aria-live="polite"></div>
+      <div id="detailActivitySummary" class="detail-sublabel"></div>
+      <div id="detailActivityRows" class="identity-history">Loading saved activity…</div>
+      <details style="margin-top:10px;"><summary>Save copied BetterBanned page text</summary>
+        <p class="notes-hint">Open this user's BetterBanned page above, then copy Total Bans and the Recent Activity heading and dated rows. Copied data is labelled and is not independently verified.</p>
+        <label class="field-label" for="detailActivityText">Copied page text</label>
+        <textarea id="detailActivityText" class="field-input" rows="5" maxlength="65536"></textarea>
+        <button id="detailActivitySave" class="btn btn-ghost btn-small" type="button">Save copied page text</button>
+      </details>
+      <p class="notes-hint">BetterBanned is a third-party source. Displayed activity may cover only part of a channel's history. Refresh is on demand; saved records remain available if access fails.</p>
     </div>
 
     <div class="detail-section">
@@ -2802,6 +2839,8 @@ function renderDetail(s) {
   `;
 
   wireDetailEvents(s);
+  wireTwitchIdentity(s);
+  wireBetterBannedActivity(s);
   loadLiveWindow(s.username);
   loadResponseHistory(s.username);
   loadSessionReplay(s.username);
@@ -3073,6 +3112,134 @@ async function startVodDownload() {
     if (token !== vodState.token) return;
     progress.textContent = e.message; vodState.busy = false; button.disabled = false;
   }
+}
+
+function wireBetterBannedActivity(s) {
+  const root = document.getElementById("detailActivitySection");
+  const status = root.querySelector("#detailActivityStatus");
+  const summary = root.querySelector("#detailActivitySummary");
+  const rows = root.querySelector("#detailActivityRows");
+  const filter = root.querySelector("#detailActivityFilter");
+  const text = root.querySelector("#detailActivityText");
+  const endpoint = `/streamers/${encodeURIComponent(s.username)}/activity`;
+  const controller = new AbortController();
+  let snapshot = null;
+  let busy = false;
+  let revision = 0;
+  const priorFlush = _detailFlush;
+  _detailFlush = async () => { controller.abort(); if (priorFlush) await priorFlush(); };
+  function display(result) {
+    if (!root.isConnected) return;
+    snapshot = result.snapshot;
+    if (!snapshot) {
+      summary.textContent = "";
+      rows.textContent = "No saved activity. Refresh from BetterBanned or save copied page text.";
+      return;
+    }
+    summary.textContent = `Total bans: ${snapshot.total_bans ?? "Unknown"} · ${snapshot.source_type === "copied" ? "Copied page text · unverified" : "Fetched from BetterBanned"} · ${snapshot.provider_username} · saved ${new Date(snapshot.retrieved_at).toLocaleString()}`;
+    if (snapshot.provider_username !== (s.current_username || s.username)) summary.textContent += " · Saved under a previous username";
+    const events = snapshot.events.filter(event => filter.value !== "bans" || event.kind === "banned" || event.kind === "unbanned");
+    rows.innerHTML = events.length ? events.map(event => `<div class="identity-history-row"><div><strong>${escapeHtml(event.date)}</strong> ${escapeHtml(event.description)}</div></div>`).join("") : "No events in this saved section.";
+  }
+  filter.onchange = () => display({snapshot});
+  async function save(copied) {
+    if (busy || !root.isConnected) return;
+    if (copied && !text.value.trim()) { status.textContent = "Paste the page's Recent Activity section first."; return; }
+    busy = true;
+    ++revision;
+    for (const button of root.querySelectorAll("button")) button.disabled = true;
+    status.textContent = copied ? "Saving copied activity…" : "Fetching BetterBanned activity…";
+    try {
+      const result = await api(endpoint + (copied ? "/copied" : "/refresh"), {method:"POST", ...(copied ? {body:JSON.stringify({text:text.value, provider_username:s.current_username || s.username})} : {})});
+      if (!root.isConnected) return;
+      display(result);
+      status.textContent = copied ? "Copied activity saved." : "Activity refreshed.";
+      if (copied) text.value = "";
+    } catch (error) {
+      if (root.isConnected) status.textContent = error.message;
+    } finally {
+      busy = false;
+      if (root.isConnected) for (const button of root.querySelectorAll("button")) button.disabled = false;
+    }
+  }
+  root.querySelector("#detailActivityRefresh").onclick = () => save(false);
+  root.querySelector("#detailActivitySave").onclick = () => save(true);
+  apiAbortable(endpoint, {}, controller.signal).then(result => {
+    if (root.isConnected && revision === 0) display(result);
+  }).catch(error => {
+    if (root.isConnected && revision === 0 && error.name !== "AbortError") { status.textContent = error.message; rows.textContent = "Could not load saved activity."; }
+  });
+}
+
+function wireTwitchIdentity(s) {
+  const root = document.getElementById("detailIdentitySection");
+  const status = root.querySelector("#detailIdentityStatus");
+  const history = root.querySelector("#detailUsernameHistory");
+  const idInput = root.querySelector("#detailTwitchId");
+  const previousInput = root.querySelector("#detailPreviousUsername");
+  const endpoint = `/streamers/${encodeURIComponent(s.username)}/identity`;
+  const controller = new AbortController();
+  let busy = false;
+  let revision = 0;
+  let idEdited = false;
+  idInput.addEventListener("input", () => { idEdited = true; });
+  const priorFlush = _detailFlush;
+  _detailFlush = async () => { controller.abort(); if (priorFlush) await priorFlush(); };
+
+  function display(identity) {
+    if (!root.isConnected) return;
+    if (!idEdited) idInput.value = identity.twitch_id || "";
+    root.querySelector("#detailCurrentUsername").textContent = identity.current_username;
+    status.textContent = identity.checked_at ? `Last checked: ${new Date(identity.checked_at).toLocaleString()}` : "No confirmed Twitch ID yet.";
+    history.innerHTML = identity.history.length ? identity.history.map(entry => `
+      <div class="identity-history-row">
+        <div>${escapeHtml(entry.previous_username)}${entry.new_username ? ` → ${escapeHtml(entry.new_username)}` : ""}
+          <div class="notes-hint">${entry.source === "observed" ? `Confirmed by saved Twitch ID · observed ${escapeHtml(new Date(entry.observed_at).toLocaleString())}` : "Manually supplied · unverified; change date unknown"}</div>
+        </div>
+        ${entry.source === "manual" ? `<button class="icon-btn" type="button" data-remove-identity-history="${entry.id}" aria-label="Remove manual history for ${escapeAttr(entry.previous_username)}">×</button>` : ""}
+      </div>`).join("") : "No username changes recorded yet.";
+    for (const button of history.querySelectorAll("[data-remove-identity-history]")) button.onclick = () => mutate(endpoint + `/history/${button.dataset.removeIdentityHistory}`, {method:"DELETE"});
+    Object.assign(s, {twitch_id:identity.twitch_id, current_username:identity.current_username, url:`https://twitch.tv/${identity.current_username}`});
+    const item = state.items.find(item => item.username === s.username);
+    if (item) Object.assign(item, {twitch_id:s.twitch_id, current_username:s.current_username, url:s.url});
+    document.getElementById("detailTwitchLink").href = s.url;
+    document.getElementById("detailBetterBannedLink").href = `https://betterbanned.com/en/streamer/${encodeURIComponent(s.current_username)}`;
+    document.querySelector("#detailContent .detail-name").innerHTML = `${s.live_status === "Live" ? '<span class="live-dot"></span>' : ""}${escapeHtml(s.alias || s.current_username || s.username)}`;
+    renderGrid();
+  }
+
+  async function mutate(path, options) {
+    if (busy) return;
+    busy = true;
+    ++revision;
+    for (const button of root.querySelectorAll("button")) button.disabled = true;
+    status.textContent = "Checking / saving…";
+    try {
+      const identity = await api(path, options);
+      if (!root.isConnected) return;
+      idEdited = false;
+      display(identity);
+      if (options.method === "POST" && path.endsWith("/history")) previousInput.value = "";
+    } catch (error) {
+      if (root.isConnected) status.textContent = error.message;
+    } finally {
+      busy = false;
+      if (root.isConnected) for (const button of root.querySelectorAll("button")) button.disabled = false;
+    }
+  }
+  root.querySelector("#detailCheckUsername").onclick = () => mutate(endpoint + "/check", {method:"POST"});
+  root.querySelector("#detailSaveTwitchId").onclick = () => {
+    if (!/^[1-9][0-9]{0,19}$/.test(idInput.value.trim())) { status.textContent = "Enter a positive numeric Twitch ID, up to 20 digits."; return; }
+    mutate(endpoint, {method:"PUT", body:JSON.stringify({twitch_id:idInput.value.trim()})});
+  };
+  root.querySelector("#detailAddPreviousUsername").onclick = () => {
+    const name = previousInput.value.trim().replace(/^@/, "");
+    if (!/^[a-z0-9_]{1,25}$/i.test(name)) { status.textContent = "Enter a previous username using letters, digits, or underscores."; return; }
+    mutate(endpoint + "/history", {method:"POST", body:JSON.stringify({username:name})});
+  };
+  apiAbortable(endpoint, {}, controller.signal).then(identity => {
+    if (root.isConnected && revision === 0) display(identity);
+  }).catch(error => { if (root.isConnected && error.name !== "AbortError" && revision === 0) status.textContent = `Could not load history: ${error.message}`; });
 }
 
 function wireDetailEvents(s) {
@@ -3763,7 +3930,7 @@ function currentDiscoverFilters() {
 
 function trackButtonHtml(r) {
   return r.already_tracked
-    ? `<button class="btn btn-danger btn-small" style="width:auto;" data-track="${escapeAttr(r.username)}" data-tracked="1">Untrack</button>`
+    ? `<button class="btn btn-danger btn-small" style="width:auto;" data-track="${escapeAttr(r.tracked_username || r.username)}" data-public-username="${escapeAttr(r.username)}" data-tracked="1">Untrack</button>`
     : `<button class="btn btn-primary btn-small" style="width:auto;" data-track="${escapeAttr(r.username)}">Track</button>`;
 }
 
@@ -3833,12 +4000,13 @@ function wireTrackButton(btn) {
     btn.dataset.trackBusy = "1";
     const username = btn.dataset.track;
     const alreadyTracked = btn.dataset.tracked === "1";
+    const publicUsername = btn.dataset.publicUsername || username;
     btn.disabled = true;
     try {
       if (alreadyTracked) {
         await api(`/streamers/${encodeURIComponent(username)}`, { method: "DELETE" });
         toast(`Untracked ${username}`, "");
-        btn.outerHTML = `<button class="btn btn-primary btn-small" style="width:auto;" data-track="${escapeAttr(username)}">Track</button>`;
+        btn.outerHTML = `<button class="btn btn-primary btn-small" style="width:auto;" data-track="${escapeAttr(publicUsername)}">Track</button>`;
       } else {
         await api("/streamers", { method: "POST", body: JSON.stringify({ username }) });
         toast(`✅ Now tracking ${username}`, "success");
@@ -3850,14 +4018,15 @@ function wireTrackButton(btn) {
       // is rewired, not just the first, in case the same username appears
       // more than once in the current results (e.g. both Discover and a
       // watchlist check panel open at once).
-      document.querySelectorAll(`[data-track="${CSS.escape(username)}"]`).forEach(el => {
+      document.querySelectorAll(`[data-track="${CSS.escape(username)}"], [data-track="${CSS.escape(publicUsername)}"]`).forEach(el => {
         el.dataset.tracked = alreadyTracked ? "0" : "1";
+        if (alreadyTracked) { el.dataset.track = publicUsername; delete el.dataset.publicUsername; }
         el.textContent = alreadyTracked ? "Track" : "Untrack";
         el.classList.toggle("btn-danger", !alreadyTracked);
         el.classList.toggle("btn-primary", alreadyTracked);
         wireTrackButton(el);
       });
-      for (const item of discoverState.items) if (item.username === username) item.already_tracked = !alreadyTracked;
+      for (const item of discoverState.items) if (item.username === publicUsername) { item.already_tracked = !alreadyTracked; item.tracked_username = alreadyTracked ? null : username; }
       loadStats();
     } catch (e) {
       btn.disabled = false;

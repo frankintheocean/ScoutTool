@@ -16,7 +16,7 @@
 // pick up the new build instead of serving a stale cached shell
 // forever (the activate handler below drops any cache under an older
 // version name).
-const CACHE_VERSION = "scoutbot-v4.2";
+const CACHE_VERSION = "scoutbot-v4.3";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const API_CACHE = `${CACHE_VERSION}-api-read`;
 

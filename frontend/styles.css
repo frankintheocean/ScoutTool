@@ -2271,3 +2271,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .discovery-panel > *, #nobodyDiscoverStatus, #nobodyDiscoverResults { grid-column: 1 !important; grid-row: auto !important; }
   .main { padding: 16px; }
 }
+
+.identity-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.identity-actions .btn { width: auto; }
+.identity-history { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.identity-history-row { display: flex; align-items: start; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.identity-history-row > div { min-width: 0; }
+.identity-history-row .icon-btn { flex-shrink: 0; }
