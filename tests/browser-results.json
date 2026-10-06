@@ -1,0 +1,23 @@
+{
+  "passed": [
+    "startup and normal roster",
+    "10,000-record Show all with bounded DOM and reachable final row",
+    "virtual-grid live preview opens, resizes its row, and cleans up",
+    "small-window detail controls and autosave on close",
+    "rapid detail selection ignores older response",
+    "card selection and comparison across pages; Escape closes modal",
+    "failed deduplicated GET has no unhandled rejection",
+    "roster/dashboard navigation race",
+    "live system theme changes",
+    "quoted search operators and saved timezone aliases",
+    "Show all fallback page size keeps every result",
+    "Discover history restores all filters",
+    "timezone display changes preserve unsaved form fields",
+    "dashboard drag/drop persists the new order",
+    "rapid VOD tab switches and duplicate downloads; close cleans polling",
+    "Show all archived fetches beyond the first 500 rows",
+    "database replacement flushes saves and cancels delayed Undo actions",
+    "settings persist across reload"
+  ],
+  "page_errors": []
+}
