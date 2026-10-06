@@ -8,9 +8,21 @@
 # previous "prerelease vX.5"/"prerelease vX.0" scheme (0.5-per-change,
 # oldest release "prerelease v1.0") and the vX.X.0 scheme that followed it.
 
-APP_VERSION = "v4.1"
+APP_VERSION = "v4.2"
 
 CHANGELOG = [
+    {
+        "version": "v4.2",
+        "date": "2026-10-06",
+        "changes": [
+            "Combined Twitch Discover and zero-viewer discovery in one tabbed screen, preserving their independent filters and stream previews.",
+            "Fixed oversized stream titles and overflowing tags, and aligned discovery cards with the roster layout.",
+            "Fixed header button overflow in smaller windows and full-width sort controls; moved secondary header actions into Tools.",
+            "Added removable filter chips and reliable Clear filters for roster and both discovery tabs, including remembered zero-viewer filters.",
+            "Reduced duplicate Twitch searches by sharing in-flight work and briefly reusing overlapping stream pages and user lookups.",
+            "Refreshed tracking, location, and blacklist status on cached discovery results; kept cancellation, retries, and shutdown cleanup safe.",
+        ],
+    },
     {
         "version": "v4.1",
         "date": "2026-10-06",

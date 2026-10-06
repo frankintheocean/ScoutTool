@@ -6,6 +6,8 @@ from datetime import date, datetime, timezone
 
 import aiohttp
 
+from discover_cache import shared_search, invalidate_all as invalidate_discover_cache
+
 import database as db
 from config import TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET
 from logger import logger
@@ -42,6 +44,7 @@ def set_credentials(client_id, client_secret):
     token_expiry = 0
     follower_cache.clear()
     _search_pages.clear()
+    invalidate_discover_cache()
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 MAX_BATCH_SIZE = 100
@@ -370,7 +373,10 @@ async def get_followers(user_id):
     if cached and cache_valid(cached, FOLLOWER_CACHE_TIME):
         return cached["value"]
 
-    response = await twitch_request("channels/followers", {"broadcaster_id": user_id}, refresh_on_unauthorized=False)
+    response = await shared_search(
+        lambda: twitch_request("channels/followers", {"broadcaster_id": user_id}, refresh_on_unauthorized=False),
+        cache=False, source="twitch-follower-lookup", user_id=user_id, client_id=CLIENT_ID,
+    )
 
     if response is None:
         global _follower_lookup_warned
@@ -559,7 +565,10 @@ async def get_users_by_id(user_ids):
         batch = user_ids[i:i + MAX_BATCH_SIZE]
         params = [("id", uid) for uid in batch]
 
-        response = await twitch_request("users", params)
+        response = await shared_search(
+            lambda: twitch_request("users", params), source="twitch-search-users",
+            params=params, client_id=CLIENT_ID,
+        )
         if not response:
             continue
 
@@ -793,7 +802,12 @@ async def search_streams(
         if next_cursor:
             params["after"] = next_cursor
 
-        response = await twitch_request("streams", params)
+        # Viewer/tag/follower filters are local; their upstream pages overlap.
+        # Share raw pages across those searches while keeping matching/paging intact.
+        response = await shared_search(
+            lambda: twitch_request("streams", params), source="twitch-stream-page",
+            params=params, client_id=CLIENT_ID,
+        )
         pages_fetched += 1
 
         if not response or not response.get("data"):

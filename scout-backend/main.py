@@ -36,7 +36,7 @@ import alerts
 from scoring import calculate_raid_score, get_raid_candidates
 from serializers import streamer_to_dict, streamers_to_list
 from tracker import tracker_wrapper
-from discover_cache import get_cached_discover, set_cached_discover, invalidate_all as invalidate_discover_cache
+from discover_cache import shared_search, close_pending_searches, invalidate_all as invalidate_discover_cache
 from logger import logger
 from app_version import APP_VERSION, CHANGELOG
 from errors import AppError, ErrorCode, register_exception_handlers
@@ -179,6 +179,7 @@ async def lifespan(app: FastAPI):
         discover_alert_task.cancel()
         category_watch_task.cancel()
         await asyncio.gather(task, discover_alert_task, category_watch_task, return_exceptions=True)
+        await close_pending_searches()
         await twitch_api.close_session()
         await asyncio.to_thread(db.close_all_connections)
 
@@ -1577,15 +1578,18 @@ async def discover_zero_viewers(
 ):
     response.headers["Cache-Control"] = "no-store"
     try:
-        items = await nobody_discovery.search_zero_viewers(
-            include, match, limit, blacklist=await asyncio.to_thread(db.get_blacklist_set),
+        denied = await asyncio.to_thread(db.get_blacklist_set)
+        items = await shared_search(
+            lambda: nobody_discovery.search_zero_viewers(include, match, limit, blacklist=denied),
+            cache=False, source="zero-viewers", include=include, match=match, limit=limit,
+            blacklist=sorted(denied),
         )
     except nobody_discovery.NobodyDiscoveryError as exc:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         raise HTTPException(status_code=exc.status_code, detail=str(exc), headers=headers) from exc
     # A blacklist or database import may change while the provider is awaited.
     denied = await asyncio.to_thread(db.get_blacklist_set)
-    items = [item for item in items if item["username"] not in denied]
+    items = [dict(item) for item in items if item["username"] not in denied]
     tracked = await asyncio.to_thread(db.streamers_exist_bulk, [item["username"] for item in items])
     for item in items:
         item["already_tracked"] = item["username"] in tracked
@@ -1624,7 +1628,8 @@ async def discover(
     filter combo — see discover_cache.py — so repeatedly re-running the
     same search (reopening the modal, a saved Discover alert polling,
     etc.) doesn't re-hit Twitch every time. Paginated "load more" requests
-    always go live, since a cursor is only valid for one specific page."""
+    share only in-flight result work. Raw Twitch pages are also briefly
+    reused across local filter combinations; local metadata is always fresh."""
     tag_list = [t.strip() for t in tags.split(",")] if tags else None
     exclude_tag_list = [t.strip() for t in exclude_tags.split(",")] if exclude_tags else None
 
@@ -1636,33 +1641,22 @@ async def discover(
         created_before=created_before, limit=limit,
     )
 
-    if cursor is None:
-        cached = get_cached_discover(**cache_filters)
-        if cached is not None:
-            return cached
-
+    denied = await asyncio.to_thread(db.get_blacklist_set)
     try:
-        results, next_cursor = await twitch_api.search_streams(
-            category=category,
-            min_viewers=min_viewers,
-            max_viewers=max_viewers,
-            broadcaster_type=broadcaster_type,
-            language=language,
-            tags=tag_list,
-            exclude_tags=exclude_tag_list,
-            min_followers=min_followers,
-            max_followers=max_followers,
-            created_after=created_after,
-            created_before=created_before,
-            limit=limit,
-            cursor=cursor,
-            blacklist=await asyncio.to_thread(db.get_blacklist_set),
+        results, next_cursor = await shared_search(
+            lambda: twitch_api.search_streams(**cache_filters, cursor=cursor, blacklist=denied),
+            cache=cursor is None, source="twitch-results", cursor=cursor,
+            blacklist=sorted(denied), **cache_filters,
         )
     except TwitchRateLimitedError as e:
         rate_limited(e)
     except Exception as e:
         logger.error(f"Twitch discover failed: {e}")
         raise HTTPException(status_code=502, detail="Twitch API request failed — check TWITCH_CLIENT_ID/SECRET")
+
+    # Recheck after awaiting provider work, including a blacklist/import change.
+    denied = await asyncio.to_thread(db.get_blacklist_set)
+    results = [dict(r) for r in results if r["username"] not in denied]
 
     # Live Twitch search results carry no location data of their own
     # (Twitch's stream-search API doesn't expose one, and bio-scraping
@@ -1682,9 +1676,6 @@ async def discover(
         r["location"] = tracked_locations.get(r["username"], "")
 
     payload = {"items": results, "next_cursor": next_cursor}
-
-    if cursor is None:
-        set_cached_discover(payload, **cache_filters)
 
     return payload
 
