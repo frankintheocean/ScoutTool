@@ -18,9 +18,9 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +29,7 @@ from pydantic import BaseModel
 import config
 import database as db
 import twitch_api
+import nobody_discovery
 from twitch_api import TwitchRateLimitedError
 import notifier
 import alerts
@@ -678,7 +679,8 @@ def _prune_stale_vod_jobs_locked():
     cutoff = time.time() - 3600
     for stale_id in [
         jid for jid, j in VOD_DOWNLOAD_JOBS.items()
-        if j.get("status") in ("complete", "failed") and j.get("_created_ts", cutoff) < cutoff
+        if j.get("status") in ("complete", "failed")
+        and j.get("_finished_ts", j.get("_created_ts", cutoff)) < cutoff
     ]:
         del VOD_DOWNLOAD_JOBS[stale_id]
 
@@ -690,6 +692,37 @@ def prune_stale_vod_jobs():
         _prune_stale_vod_jobs_locked()
 
 
+def _finish_vod_job_locked(job, status, **values):
+    """Start result retention when work ends, including worker-start failures."""
+    job.update(status=status, completed_at=datetime.now(timezone.utc).isoformat(),
+               _finished_ts=time.time(), **values)
+
+
+def _public_vod_job(job):
+    return {key: value for key, value in job.items() if not key.startswith("_")}
+
+
+def _download_time_label(value):
+    return "end" if value is None else str(value).removesuffix(".0")
+
+
+def _start_queued_vod_downloads():
+    # Caller holds VOD_JOB_LOCK. Reserve workers before starting threads;
+    # concurrent requests cannot exceed two active download workers.
+    active = sum(1 for job in VOD_DOWNLOAD_JOBS.values() if job.get("_started") and job["status"] in ("queued", "downloading"))
+    for job in VOD_DOWNLOAD_JOBS.values():
+        if active >= 2: break
+        if job["status"] != "queued" or job.get("_started"): continue
+        job["_started"] = True
+        url, start_time, end_time = job["_request_key"]
+        try:
+            threading.Thread(target=_run_vod_download, args=(job["id"], url, start_time, end_time), daemon=True).start()
+            active += 1
+        except Exception as exc:
+            _finish_vod_job_locked(job, "failed", error=str(exc))
+
+
+
 def _run_vod_download(job_id, url, start_time=None, end_time=None):
     with VOD_JOB_LOCK:
         job = VOD_DOWNLOAD_JOBS.get(job_id)
@@ -697,7 +730,8 @@ def _run_vod_download(job_id, url, start_time=None, end_time=None):
         job.update(status="downloading", progress=0, error=None, elapsed=0, eta=None, speed=None)
     try:
         import yt_dlp
-        suffix = f" [{start_time or 0:g}-{end_time if end_time is not None else 'end'}]" if start_time is not None or end_time is not None else ""
+        suffix = (f" [{_download_time_label(start_time or 0)}-{_download_time_label(end_time)}]"
+                  if start_time is not None or end_time is not None else "")
         outtmpl = str(_downloads_dir() / ("%(uploader)s - %(title)s [%(id)s]" + suffix + ".%(ext)s"))
         def hook(d):
             with VOD_JOB_LOCK:
@@ -740,12 +774,12 @@ def _run_vod_download(job_id, url, start_time=None, end_time=None):
             if ydl.download([url]):
                 raise RuntimeError("The download did not complete successfully")
         with VOD_JOB_LOCK:
-            VOD_DOWNLOAD_JOBS[job_id].update(status="complete", progress=100, eta=0, completed_at=datetime.now(timezone.utc).isoformat())
+            _finish_vod_job_locked(VOD_DOWNLOAD_JOBS[job_id], "complete", progress=100, eta=0)
     except Exception as exc:
         logger.exception("VOD download failed")
         with VOD_JOB_LOCK:
             if job_id in VOD_DOWNLOAD_JOBS:
-                VOD_DOWNLOAD_JOBS[job_id].update(status="failed", error=str(exc))
+                _finish_vod_job_locked(VOD_DOWNLOAD_JOBS[job_id], "failed", error=str(exc))
 
     finally:
         with VOD_JOB_LOCK:
@@ -865,7 +899,7 @@ def start_vod_download(payload: dict):
     try:
         start_time = float(start_time) if start_time not in (None, "") else None
         end_time = float(end_time) if end_time not in (None, "") else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise HTTPException(status_code=400, detail="Invalid start or end time")
     if any(value is not None and not math.isfinite(value) for value in (start_time, end_time)):
         raise HTTPException(status_code=400, detail="Start and end times must be finite")
@@ -879,18 +913,17 @@ def start_vod_download(payload: dict):
         request_key = (url, start_time, end_time)
         for existing in VOD_DOWNLOAD_JOBS.values():
             if existing.get("_request_key") == request_key and existing["status"] in ("queued", "downloading"):
-                return {k: v for k, v in existing.items() if not k.startswith("_")}
+                return _public_vod_job(existing)
         VOD_DOWNLOAD_JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0, "error": None, "file": None, "elapsed": None, "eta": None, "speed": None, "created_at": datetime.now(timezone.utc).isoformat(), "_created_ts": time.time(), "_request_key": request_key}
-    with VOD_JOB_LOCK:
         _start_queued_vod_downloads()
-        return {k: v for k, v in VOD_DOWNLOAD_JOBS[job_id].items() if not k.startswith("_")}
+        return _public_vod_job(VOD_DOWNLOAD_JOBS[job_id])
 
 @app.get("/api/vod-downloads/{job_id}")
 def get_vod_download(job_id: str):
     with VOD_JOB_LOCK:
         job = VOD_DOWNLOAD_JOBS.get(job_id)
         if not job: raise HTTPException(status_code=404, detail="Download job not found")
-        return {k: v for k, v in job.items() if not k.startswith("_")}
+        return _public_vod_job(job)
 
 @app.get("/api/streamers/{username}")
 def get_streamer(username: str):
@@ -1192,17 +1225,13 @@ async def scrape_all_social_links():
     and reports a simple success/failure count rather than failing the
     whole request if a handful of channels have nothing to find or
     transiently fail."""
-    generation = db.database_generation
-    usernames = [row["username"] for row in await asyncio.to_thread(db.get_all, include_archived=False)]
-
-    scrape_slots = asyncio.Semaphore(8)
+    rows, generation = await asyncio.to_thread(db.get_tracking_snapshot)
+    usernames = [row["username"] for row in rows]
 
     async def _scrape_one(username):
-        async with scrape_slots:
-            return await _scrape_one_bounded(username)
-
-    async def _scrape_one_bounded(username):
         try:
+            if generation != db.database_generation:
+                return False
             social = await twitch_api.get_channel_social(username)
             if not social.get("_failed"):
                 await asyncio.to_thread(db.set_scraped_social, 
@@ -1220,8 +1249,25 @@ async def scrape_all_social_links():
             logger.warning(f"⚠️ Bulk re-scrape failed for {username}: {e}")
             return False
 
-    results = await asyncio.gather(*(_scrape_one(u) for u in usernames))
-    succeeded = sum(1 for r in results if r)
+    remaining = iter(usernames)
+
+    async def _worker():
+        succeeded = 0
+        # Iterator access occurs between awaits on the same event loop.
+        for username in remaining:
+            if generation != db.database_generation:
+                break
+            succeeded += bool(await _scrape_one(username))
+        return succeeded
+
+    workers = [asyncio.create_task(_worker()) for _ in range(min(8, len(usernames)))]
+    try:
+        succeeded = sum(await asyncio.gather(*workers))
+    finally:
+        for worker in workers:
+            worker.cancel()
+        with anyio.CancelScope(shield=True):
+            await asyncio.gather(*workers, return_exceptions=True)
 
     return {
         "ok": True,
@@ -1412,20 +1458,6 @@ def toggle_notify(username: str):
 # username, tracked or not, since the whole point is keeping a name out
 # of Discover results even if it's never been added to the roster.
 
-def _start_queued_vod_downloads():
-    # Caller holds VOD_JOB_LOCK. Reserve workers before starting threads;
-    # concurrent requests cannot exceed two active download workers.
-    active = sum(1 for job in VOD_DOWNLOAD_JOBS.values() if job.get("_started") and job["status"] in ("queued", "downloading"))
-    for job in VOD_DOWNLOAD_JOBS.values():
-        if active >= 2: break
-        if job["status"] != "queued" or job.get("_started"): continue
-        job["_started"] = True
-        url, start_time, end_time = job["_request_key"]
-        try:
-            threading.Thread(target=_run_vod_download, args=(job["id"], url, start_time, end_time), daemon=True).start()
-            active += 1
-        except Exception as exc:
-            job.update(status="failed", error=str(exc))
 
 
 class BlacklistBody(BaseModel):
@@ -1535,6 +1567,30 @@ def outreach_by_status(status: str, include_archived: bool = False):
 # ==========================
 # DISCOVERY / SEARCH LIVE TWITCH
 # ==========================
+
+@app.get("/api/discover/zero-viewers")
+async def discover_zero_viewers(
+    response: Response,
+    include: str = Query(default="", max_length=65),
+    match: Literal["all", "any"] = "all",
+    limit: int = Query(default=25, ge=1, le=65),
+):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        items = await nobody_discovery.search_zero_viewers(
+            include, match, limit, blacklist=await asyncio.to_thread(db.get_blacklist_set),
+        )
+    except nobody_discovery.NobodyDiscoveryError as exc:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        raise HTTPException(status_code=exc.status_code, detail=str(exc), headers=headers) from exc
+    # A blacklist or database import may change while the provider is awaited.
+    denied = await asyncio.to_thread(db.get_blacklist_set)
+    items = [item for item in items if item["username"] not in denied]
+    tracked = await asyncio.to_thread(db.streamers_exist_bulk, [item["username"] for item in items])
+    for item in items:
+        item["already_tracked"] = item["username"] in tracked
+    return {"items": items, "source": "nobody.live"}
+
 
 @app.get("/api/discover")
 async def discover(

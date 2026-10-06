@@ -1,3 +1,5 @@
+from heapq import nlargest
+
 from database import get_all, get_average_viewers, get_average_viewers_bulk
 
 
@@ -192,28 +194,18 @@ def calculate_raid_score(streamer, fallback_average=None):
 # ==========================
 
 def get_raid_candidates(limit=5):
-
+    """Select the best scores, preserving roster order for equal scores."""
+    if isinstance(limit, int) and limit == 0:
+        return []
     streamers = get_all()
-
-
     averages = get_average_viewers_bulk([s["username"] for s in streamers if not s["average_viewers"]])
-    ranked = [
-        (
-            streamer,
-            calculate_raid_score(streamer, averages.get(streamer["username"], 0))
-        )
-
+    ranked = (
+        (streamer, calculate_raid_score(streamer, averages.get(streamer["username"], 0)))
         for streamer in streamers
-    ]
-
-
-    ranked.sort(
-        key=lambda x: x[1],
-        reverse=True
     )
-
-
-    return [
-        streamer
-        for streamer, score in ranked[:limit]
-    ]
+    if isinstance(limit, int) and 0 < limit < len(streamers):
+        selected = nlargest(limit, ranked, key=lambda item: item[1])
+    else:
+        # Preserve the existing Python slicing behavior for None/negative limits.
+        selected = sorted(ranked, key=lambda item: item[1], reverse=True)[:limit]
+    return [streamer for streamer, _ in selected]

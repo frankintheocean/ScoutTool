@@ -49,8 +49,9 @@ def set_cached_discover(value, **filters):
         for old in list(_cache):
             if now - _cache[old]["timestamp"] >= _TTL:
                 del _cache[old]
-        while len(_cache) >= 100:
-            del _cache[next(iter(_cache))]
+        if key not in _cache:
+            while len(_cache) >= 100:
+                del _cache[next(iter(_cache))]
         _cache[key] = {"value": value, "timestamp": now}
 
 

@@ -204,69 +204,62 @@ async def get_access_token():
 # API REQUEST
 # ==========================
 
-async def twitch_request(endpoint, params, refresh_on_unauthorized=True):
-    global access_token
+def _rate_limit_wait(headers):
+    now = time.time()
+    try:
+        reset = int(headers.get("Ratelimit-Reset", now + 5))
+    except (TypeError, ValueError, OverflowError):
+        return 5
+    return max(reset - int(now), 5)
 
+
+async def twitch_request(endpoint, params, refresh_on_unauthorized=True):
+    """Retry authentication/rate limits within a three-request budget."""
+    global access_token
     token = await get_access_token()
     if not token:
         return None
-
-    headers = {
-        "Client-ID": CLIENT_ID,
-        "Authorization": f"Bearer {token}",
-    }
-
+    headers = {"Client-ID": CLIENT_ID, "Authorization": f"Bearer {token}"}
     s = await get_session()
+    rate_limit_retries = 0
 
-    _retry = 0  # counts 429-specific retries only, capped separately below
-    for _ in range(3):
+    for attempt in range(3):
         async with s.get(
-            f"https://api.twitch.tv/helix/{endpoint}",
-            headers=headers,
-            params=params,
+            f"https://api.twitch.tv/helix/{endpoint}", headers=headers, params=params,
         ) as response:
-
-            if response.status == 401:
+            status = response.status
+            if status == 401:
                 if not refresh_on_unauthorized:
                     return None
-                logger.warning("⚠️ Twitch token expired")
-                access_token = None
-
-                token = await get_access_token()
-                if not token:
+            else:
+                _record_rate_limit_headers(response.headers, status)
+                if status == 429:
+                    wait = _rate_limit_wait(response.headers)
+                elif status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Twitch API error {status}: {endpoint}")
                     return None
 
-                headers["Authorization"] = f"Bearer {token}"
-                continue
-
-            _record_rate_limit_headers(response.headers, response.status)
-
-            if response.status == 429:
-                reset = int(response.headers.get("Ratelimit-Reset", time.time() + 5))
-                wait = max(reset - int(time.time()), 5)
-
-                # Previously this always slept the full `wait` (which can be
-                # several seconds) and retried silently, so a rate-limited
-                # request just hung from the frontend's perspective with no
-                # indication of why. Only one short, bounded retry happens
-                # here now; if Twitch is still limiting us after that,
-                # surface it as a real error instead of blocking further.
-                if _retry >= 1:
-                    logger.warning(f"⚠️ Rate limited by Twitch, retry-after {wait}s")
-                    raise TwitchRateLimitedError(wait)
-
-                short_wait = min(wait, 3)
-                logger.warning(f"⚠️ Rate limited. Waiting {short_wait}s (retry {_retry + 1}/1)")
-                await asyncio.sleep(short_wait)
-                _retry += 1
-                continue
-
-            if response.status != 200:
-                logger.error(f"Twitch API error {response.status}: {endpoint}")
+        # Release the response/connection before token refresh or backoff.
+        if status == 401:
+            logger.warning("Twitch token expired")
+            # Another in-flight request may already have refreshed this token.
+            if access_token == token:
+                access_token = None
+            token = await get_access_token()
+            if not token:
                 return None
+            headers.update({"Client-ID": CLIENT_ID, "Authorization": f"Bearer {token}"})
+            continue
 
-            return await response.json()
-
+        if rate_limit_retries >= 1 or attempt == 2:
+            logger.warning("Rate limited by Twitch, retry-after %ss", wait)
+            raise TwitchRateLimitedError(wait)
+        short_wait = min(wait, 3)
+        logger.warning("Rate limited. Waiting %ss (retry 1/1)", short_wait)
+        await asyncio.sleep(short_wait)
+        rate_limit_retries += 1
     return None
 
 
@@ -274,19 +267,26 @@ async def twitch_request(endpoint, params, refresh_on_unauthorized=True):
 # CACHE HELPERS
 # ==========================
 
+_CACHE_MAX_ENTRIES = 50000
+_CACHE_SWEEP_WRITES = 128
+# The four module-owned dictionaries have stable identities for the process.
+_cache_write_counts = {}
+
+
 def _store_cache(cache, key, value, ttl):
-    # Periodically sweep expired entries; cap long-running discovery churn
-    # without evicting a normal large roster on every tracker cycle.
-    if len(cache) % 128 == 0 or len(cache) >= 50000:
+    """Amortize expiration scans over writes; never evict for an update."""
+    cache_id = id(cache)
+    writes = _cache_write_counts.get(cache_id, 0) + 1
+    _cache_write_counts[cache_id] = writes % _CACHE_SWEEP_WRITES
+    if writes >= _CACHE_SWEEP_WRITES:
         now = time.time()
         for old in list(cache):
             entry = cache.get(old)
             if entry and now - entry["timestamp"] >= ttl:
                 cache.pop(old, None)
-        while len(cache) >= 50000:
-            oldest = next(iter(cache), None)
-            if oldest is None: break
-            cache.pop(oldest, None)
+    if key not in cache:
+        while len(cache) >= _CACHE_MAX_ENTRIES:
+            cache.pop(next(iter(cache)))
     cache[key] = value
 
 

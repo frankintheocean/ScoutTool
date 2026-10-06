@@ -8,9 +8,21 @@
 # previous "prerelease vX.5"/"prerelease vX.0" scheme (0.5-per-change,
 # oldest release "prerelease v1.0") and the vX.X.0 scheme that followed it.
 
-APP_VERSION = "v4.0"
+APP_VERSION = "v4.1"
 
 CHANGELOG = [
+    {
+        "version": "v4.1",
+        "date": "2026-10-06",
+        "changes": [
+            "Added a separate zero-viewer discovery module using nobody.live, with game/tag search phrases, all/any matching, and remembered filters.",
+            "Reduced bulk-scrape task memory, cache-maintenance stalls, raid-candidate ranking memory, and repeated virtual-scroll work.",
+            "Stopped virtual scrolling from reloading retained live previews or losing inline editor focus.",
+            "Fixed cache updates evicting unrelated results and made Twitch retries release connections before waiting or refreshing tokens.",
+            "Kept long-download results available after completion, preserved precise trim filenames, and handled oversized numeric times correctly.",
+            "Fixed rapid Discover Load more actions overlapping requests.",
+        ],
+    },
     {
         "version": "v4.0",
         "date": "2026-10-06",
