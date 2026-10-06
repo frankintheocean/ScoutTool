@@ -36,10 +36,21 @@ async def checks(url):
             await page.wait_for_timeout(100)
         assert await page.locator('.streamer-card').last.get_attribute('data-username')=='user00000'
         passed.append('10,000-record Show all with bounded DOM and reachable final row')
+        assert await page.evaluate('firstVirtualOffsetAtLeast([0,10,35,80],11)')==2
+        assert await page.evaluate('firstVirtualOffsetAtLeast([0,10,35,80],10)')==1
+        assert await page.evaluate('firstVirtualOffsetAtLeast([0,10,35,80],100)')==3
+        await page.wait_for_function('document.getElementById("cardGrid")._virtualLayout !== null')
+        assert await page.evaluate('''() => { const grid=document.getElementById("cardGrid");const offsets=grid._virtualLayout.offsets;renderVirtualGrid();return grid._virtualLayout?.offsets===offsets; }''')
+        passed.append('virtual-scroll offset boundaries and reuse without rebuilding')
         await page.route('https://player.twitch.tv/**', lambda route: route.abort())
         preview=page.locator('[data-preview-toggle="user00001"]')
         await preview.click()
         assert await page.locator('[data-preview-embed="user00001"] iframe').count()==1
+        await page.evaluate('''() => { window.fixturePreviewLoads=0;document.querySelector('[data-preview-embed="user00001"] iframe').srcdoc="<script>parent.fixturePreviewLoads++<"+"/script>"; }''')
+        await page.wait_for_function('window.fixturePreviewLoads===1')
+        await page.evaluate('renderVirtualGrid();renderVirtualGrid();renderVirtualGrid()')
+        await page.wait_for_timeout(150)
+        assert await page.evaluate('window.fixturePreviewLoads')==1
         await preview.click()
         assert await page.locator('[data-preview-embed="user00001"] iframe').count()==0
         passed.append('virtual-grid live preview opens, resizes its row, and cleans up')
@@ -179,6 +190,84 @@ async def checks(url):
         await page.reload(wait_until='networkidle')
         assert await page.locator('html').get_attribute('data-theme')=='light'
         passed.append('settings persist across reload')
+        zero_requests=[]
+        async def zero_streams(route):
+            query=parse_qs(urlparse(route.request.url).query)
+            zero_requests.append(query)
+            phrase=query.get('include',[''])[0]
+            if phrase=='slow': await asyncio.sleep(.25)
+            if phrase=='error':
+                await route.fulfill(status=503,json={'detail':'nobody.live is busy. Try again.'})
+                return
+            names=['mario_runner','chess_runner'] if query.get('match',['all'])[0]=='any' else ['mario_runner']
+            await route.fulfill(json={'source':'nobody.live','items':[{'username':name,'display_name':name,'category':'Mario','tags':['speedrun'],'title':'<img src=x onerror=alert(1)>','live_viewers':0,'already_tracked':False} for name in names]})
+        await page.route('**/api/discover/zero-viewers?*',zero_streams)
+        await page.route('https://static-cdn.jtvnw.net/**',lambda route:route.abort())
+        await page.locator('#btnNobodyDiscover').click()
+        await page.locator('#nobodySearchPhrase').fill('mario speedrun')
+        await page.locator('#nobodyRememberFilters').check()
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.querySelectorAll(".zero-viewer-card").length===1')
+        assert zero_requests[-1]['include']==['mario speedrun']
+        assert zero_requests[-1]['match']==['all']
+        assert await page.locator('.zero-viewer-card img').count()==1
+        assert '<img src=x' in await page.locator('.zero-viewer-card').inner_text()
+        await page.locator('#nobodySearchMatch').select_option('any')
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.querySelectorAll(".zero-viewer-card").length===2')
+        passed.append('separate zero-viewer module sends game/tag all/any filters and escapes results')
+        await page.set_viewport_size({'width':900,'height':650})
+        box=await page.locator('#nobodyDiscoverSubmit').bounding_box()
+        assert box and box['x']>=0 and box['x']+box['width']<=900 and box['y']+box['height']<=650
+        await page.set_viewport_size({'width':1400,'height':900})
+        await page.keyboard.press('Escape')
+        await page.reload(wait_until='networkidle')
+        await page.locator('#btnNobodyDiscover').click()
+        assert await page.locator('#nobodySearchPhrase').input_value()=='mario speedrun'
+        assert await page.locator('#nobodySearchMatch').input_value()=='any'
+        assert await page.locator('#nobodyRememberFilters').is_checked()
+        await page.locator('#nobodyRememberFilters').uncheck()
+        assert await page.evaluate('localStorage.getItem("scoutbot_zero_viewer_filters")') is None
+        passed.append('zero-viewer Remember filters survives reload and unchecking removes it')
+        await page.locator('#nobodySearchPhrase').fill('slow')
+        await page.evaluate('document.getElementById("nobodyDiscoverForm").requestSubmit()')
+        await page.locator('#nobodySearchPhrase').fill('mario')
+        await page.evaluate('document.getElementById("nobodyDiscoverForm").requestSubmit()')
+        await page.wait_for_timeout(350)
+        assert await page.locator('.zero-viewer-card').count()==2
+        await page.locator('#nobodySearchPhrase').fill('slow')
+        await page.evaluate('document.getElementById("nobodyDiscoverForm").requestSubmit()')
+        await page.evaluate('closeModal("nobodyDiscoverModal")')
+        await page.wait_for_timeout(350)
+        assert not await page.locator('#nobodyDiscoverModal').evaluate('(el)=>el.classList.contains("open")')
+        assert await page.locator('.zero-viewer-card').count()==0
+        assert not await page.locator('#nobodyDiscoverSubmit').is_disabled()
+        passed.append('zero-viewer rapid searches and close discard stale results and cancel work')
+        await page.locator('#btnNobodyDiscover').click()
+        await page.locator('#nobodySearchPhrase').fill('error')
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.getElementById("nobodyDiscoverStatus").textContent.includes("busy")')
+        assert not await page.locator('#nobodyDiscoverSubmit').is_disabled()
+        await page.locator('#nobodySearchPhrase').fill('mario')
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.querySelectorAll(".zero-viewer-card").length===2')
+        await page.evaluate('''() => { const set=Storage.prototype.setItem; window.fixtureStorageSet=set; Storage.prototype.setItem=function(key,value){if(key==="scoutbot_zero_viewer_filters")throw new DOMException("fixture quota","QuotaExceededError");return set.call(this,key,value)} }''')
+        await page.locator('#nobodyRememberFilters').check()
+        assert 'could not save' in await page.locator('#nobodyDiscoverStatus').inner_text()
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.getElementById("nobodyDiscoverStatus").textContent.includes("streams found")')
+        assert 'could not save' in await page.locator('#nobodyDiscoverStatus').inner_text()
+        passed.append('zero-viewer service errors are retryable and storage quota does not break search')
+        await page.evaluate('prepareDatabaseReplacement()')
+        assert await page.locator('.zero-viewer-card').count()==0
+        assert 'Database changed' in await page.locator('#nobodyDiscoverStatus').inner_text()
+        await page.evaluate('closeModal("nobodyDiscoverModal");Storage.prototype.setItem=window.fixtureStorageSet;localStorage.setItem("scoutbot_zero_viewer_filters","[]")')
+        await page.reload(wait_until='networkidle')
+        assert await page.locator('#nobodySearchPhrase').input_value()==''
+        assert not await page.locator('#nobodyRememberFilters').is_checked()
+        passed.append('malformed remembered zero-viewer filter data is safely ignored')
+        assert await page.evaluate('''() => { const grid=document.getElementById("cardGrid");const virtual=state.virtualScroll;state.virtualScroll=true;state.view="dashboard";teardownVirtualGrid(grid);renderVirtualGrid();const clean=!grid.classList.contains("card-grid-virtual");state.view="roster";state.virtualScroll=virtual;renderGrid();return clean; }''')
+        passed.append('queued virtual rendering cannot resurrect the grid after switching to Dashboard')
         assert errors==[],errors
         await browser.close()
     print(json.dumps({'passed':passed,'page_errors':errors},indent=2))

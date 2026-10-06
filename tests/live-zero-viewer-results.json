@@ -1,0 +1,20 @@
+[
+  {
+    "phrase": "mario speedrun",
+    "match": "all",
+    "returned": 0,
+    "status": 200
+  },
+  {
+    "phrase": "mario speedrun",
+    "match": "any",
+    "returned": 2,
+    "status": 200
+  },
+  {
+    "phrase": "",
+    "match": "any",
+    "returned": 5,
+    "status": 200
+  }
+]

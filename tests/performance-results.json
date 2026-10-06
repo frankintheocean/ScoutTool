@@ -1,0 +1,35 @@
+{
+  "fixture": "100000 preallocated rows; deterministic scorer and failed social fetches; incremental traced allocations exclude input rows/database/network",
+  "before": {
+    "cache_refresh_256_seconds": 1.6016179580000198,
+    "cache_full_scans": 256,
+    "ranking_100k_seconds": 0.12979724299998452,
+    "ranking_100k_peak_bytes": 7993112,
+    "ranking_names": [
+      "100",
+      "201",
+      "302",
+      "403",
+      "504",
+      "605"
+    ],
+    "scrape_100k_seconds": 4.016332363999936,
+    "scrape_100k_peak_bytes": 146235382
+  },
+  "after": {
+    "cache_refresh_256_seconds": 0.013090050999949199,
+    "cache_full_scans": 2,
+    "ranking_100k_seconds": 0.03421204899996155,
+    "ranking_100k_peak_bytes": 2240,
+    "ranking_names": [
+      "100",
+      "201",
+      "302",
+      "403",
+      "504",
+      "605"
+    ],
+    "scrape_100k_seconds": 0.6453207060000068,
+    "scrape_100k_peak_bytes": 1619489
+  }
+}
