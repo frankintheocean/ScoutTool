@@ -49,6 +49,7 @@ class DatabaseTests(unittest.TestCase):
         for suffix in ('', '-wal', '-shm'):
             Path(db.DB_NAME + suffix).unlink(missing_ok=True)
         db._invalidate_all_cache()
+        twitch.identity_user_cache.clear()
         db.setup()
         self.client = TestClient(main.app)
 
@@ -339,7 +340,7 @@ class DatabaseTests(unittest.TestCase):
 class AsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_zero_viewer_live_and_failed_stream_fetch(self):
         users={'alice':dict(user_id='1',username='alice',display_name='Alice',profile_image='')}
-        with patch.object(twitch,'get_bulk_users',AsyncMock(return_value=users)), patch.object(twitch,'get_followers',AsyncMock(return_value=None)):
+        with patch.object(twitch,'get_bulk_users',AsyncMock(return_value=users)), patch.object(twitch,'get_users_by_id',AsyncMock(return_value={'1':{'id':'1','login':'alice','display_name':'Alice','profile_image_url':''}})), patch.object(twitch,'get_followers',AsyncMock(return_value=None)):
             with patch.object(twitch,'twitch_request',AsyncMock(side_effect=[{'data':[]},{'data':[{'user_id':'1','viewer_count':0}]}])):
                 data=await twitch.get_bulk_streamer_data(['alice'])
                 self.assertEqual(data['alice']['live_status'],'Live')

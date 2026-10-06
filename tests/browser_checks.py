@@ -57,6 +57,12 @@ async def checks(url):
         await page.set_viewport_size({'width':900,'height':600})
         await page.evaluate('selectStreamer("user00001")')
         await page.wait_for_selector('#detailClose',state='visible')
+        betterbanned_link = page.locator('#detailBetterBannedLink')
+        assert await betterbanned_link.get_attribute('href')=='https://betterbanned.com/en/streamer/user00001'
+        assert await betterbanned_link.get_attribute('target')=='_blank'
+        assert 'noopener' in await betterbanned_link.get_attribute('rel')
+        assert 'noreferrer' in await betterbanned_link.get_attribute('rel')
+        passed.append('BetterBanned profile link uses the channel username and opens a separate tab safely')
         await page.locator('#detailNotes').fill('saved before close')
         await page.locator('#detailClose').click()
         await page.wait_for_timeout(300)
@@ -64,6 +70,45 @@ async def checks(url):
         assert (await result.json())['notes']=='saved before close'
         passed.append('small-window detail controls and autosave on close')
         await page.set_viewport_size({'width':1400,'height':900})
+        from test_betterbanned import PAGE
+        await page.evaluate('selectStreamer("user00001")')
+        await page.wait_for_selector('#detailActivitySave',state='attached')
+        await page.locator('#detailActivitySection summary').click()
+        await page.locator('#detailActivityText').fill(PAGE)
+        await page.locator('#detailActivitySave').click()
+        await page.wait_for_function('document.getElementById("detailActivityStatus").textContent==="Copied activity saved."')
+        assert await page.locator('#detailActivityRows .identity-history-row').count()==13
+        assert 'Total bans: 2' in await page.locator('#detailActivitySummary').inner_text()
+        assert 'Copied page text' in await page.locator('#detailActivitySummary').inner_text()
+        await page.locator('#detailActivityFilter').select_option('bans')
+        assert await page.locator('#detailActivityRows .identity-history-row').count()==4
+        refresh_calls=[]
+        async def failed_refresh(route):
+            refresh_calls.append(1)
+            await asyncio.sleep(.1)
+            await route.fulfill(status=502,json={'detail':'BetterBanned blocked access. Saved history was preserved.'})
+        await page.route('**/api/streamers/user00001/activity/refresh',failed_refresh)
+        await page.evaluate('document.getElementById("detailActivityRefresh").click();document.getElementById("detailActivityRefresh").click()')
+        await page.wait_for_function('document.getElementById("detailActivityStatus").textContent.includes("blocked access")')
+        assert len(refresh_calls)==1
+        assert await page.locator('#detailActivityRows .identity-history-row').count()==4
+        passed.append('copied activity persists, filters 13 events to four ban/unban records, and survives a failed duplicate refresh')
+        identity_calls=[]
+        async def rename_identity(route):
+            identity_calls.append(1)
+            await asyncio.sleep(.1)
+            await route.fulfill(json={'twitch_id':'9007199254740993','current_username':'renameduser','checked_at':'2026-10-06T00:00:00Z','history':[{'id':999,'previous_username':'user00001','new_username':'renameduser','source':'observed','observed_at':'2026-10-06T00:00:00Z'}]})
+        await page.route('**/api/streamers/user00001/identity/check',rename_identity)
+        await page.evaluate('document.getElementById("detailCheckUsername").click();document.getElementById("detailCheckUsername").click()')
+        await page.wait_for_function('document.getElementById("detailCurrentUsername").textContent==="renameduser"')
+        assert len(identity_calls)==1
+        assert await page.locator('#detailTwitchId').input_value()=='9007199254740993'
+        assert await page.locator('#detailTwitchLink').get_attribute('href')=='https://twitch.tv/renameduser'
+        assert await page.locator('#detailBetterBannedLink').get_attribute('href')=='https://betterbanned.com/en/streamer/renameduser'
+        assert await page.locator('#detailNotes').input_value()=='saved before close'
+        assert await page.locator('#detailUsernameHistory [data-remove-identity-history]').count()==0
+        passed.append('confirmed rename keeps precise numeric ID, notes and immutable record actions; updates both profile links and deduplicates checks')
+        await page.locator('#detailClose').click()
         async def slow_detail(route):
             response=await route.fetch()
             await asyncio.sleep(.35)
