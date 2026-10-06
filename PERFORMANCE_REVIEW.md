@@ -1,3 +1,19 @@
+# ScoutTool v4.2: discovery and layout verification
+
+Focused changes address the reported header/toolbar sizing and zero-viewer title/tag overflow, unify discovery into independent tabs, add removable filter chips, and reduce duplicated provider work. No dependencies, scoring rules, database schema, or discovery matching rules were changed.
+
+- Zero-viewer cards use roster typography, spacing, borders, and grid sizing while retaining stream thumbnails. Long titles, unbroken tags, and Unicode tags stay within cards.
+- Header height adapts to wrapping; toolbar controls have consistent heights. Secondary actions remain available through Tools, including keyboard focus restoration after dialogs close.
+- CSS zoom now adjusts app/dialog viewport limits, keeping larger-text dialogs inside the window.
+- Clear filters is scoped to its tab, updates remembered zero-viewer filters, and cancels pending roster search debounces.
+- Identical in-flight searches share one task. Cancelling one caller does not cancel another caller's search. Failed requests are not cached, invalidation prevents old tasks repopulating the cache, and shutdown cancels and joins pending provider work before closing sessions.
+- Raw Twitch stream pages and search user batches reuse the existing bounded, 30-second cache. Local tracking/location/blacklist data is rechecked for each response. Cursor result pages and completed random zero-viewer samples are not cached.
+- Fixtures verify 20 simultaneous identical searches invoke the provider once and two different local filter combinations fetch their common Twitch stream page once.
+
+Validation: 67 backend tests; 30 Chromium scenarios including the 10,000-streamer roster, persistence, autosave, drag/drop, previews, cancellation, errors, filter independence, Tools, and 600/900/1360px windows at smaller/normal/larger text sizes. Build and frozen runtime checks use Linux; Windows/WebView2 and the Windows installer still require verification on Windows. Fixture tests cannot establish live Twitch quota availability. The desktop PyInstaller target built successfully; every packaged frontend asset was compared byte for byte with source. The frozen backend passed legacy migration, public zero-viewer discovery, backup/integrity, settings persistence across restart, and shutdown twice.
+
+The v4.1 review below is retained as historical evidence.
+
 # ScoutTool v4.1: performance review and zero-viewer discovery
 
 Reviewed the uploaded `ScoutTool.zip` against its 39-file v4.0 baseline, commit `1c3c65ef744029197d505ceca5ea5933e216ad43`. It matches that baseline byte for byte. Changes are focused on confirmed defects, behavior-preserving optimizations, and the subsequently requested discovery module. Existing scoring weights, search filters, data retention, dependencies, and the normal Twitch Discover workflow are preserved.

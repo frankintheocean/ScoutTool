@@ -4,9 +4,13 @@ ScoutBot is the Scout module extracted from the Dashboard and packaged as a stan
 
 ## Zero-viewer discovery
 
-Open **Zero-viewer streams** in the left rail to find random English-language streams from nobody.live's index. Enter terms such as `mario speedrun` and choose **All terms** or **Any term**. Search phrases match games and tags, not stream titles. A blank phrase finds any zero-viewer stream. **Search / Refresh** draws another sample; duplicate and blacklisted channels are removed. Enable **Remember my filters** to restore the phrase and matching mode in this browser on future launches; unchecking it removes those saved filters.
+Open **Discover** in the header or left rail, then choose **Twitch Discover** or **Zero-viewer discovery**. The tabs retain separate filters and results. Zero-viewer discovery uses the roster's filter-and-card layout with stream thumbnails. Enter terms such as `mario speedrun` and choose **All terms** or **Any term**. Search phrases match games and tags, not stream titles. A blank phrase finds any zero-viewer stream. **Search / Refresh** draws another sample; duplicate and blacklisted channels are removed. Enable **Remember my filters** to restore the phrase and matching mode in this browser on future launches; unchecking it removes those saved filters.
 
-This is a separate module from the existing Twitch Discover search. It needs internet access to `https://nobody.live/stream`, but no Twitch credentials to search. Results reflect the provider's latest scan, so viewer counts and live status can change. Tracking a result uses ScoutBot's existing Twitch connection. The module reports provider outages/timeouts and lets you retry.
+Active roster and discovery filters appear as removable chips. **Clear filters** affects the current tab; clearing zero-viewer filters also updates remembered filters. Switching discovery tabs cancels pending searches without clearing completed results. Secondary header actions (Settings, Watchlists, Alerts, Raid Map, re-scraping, and What's new) are in **Tools**.
+
+Zero-viewer discovery needs internet access to `https://nobody.live/stream`, but no Twitch credentials to search. Results reflect the provider's latest scan, so viewer counts and live status can change. Tracking a result uses ScoutBot's existing Twitch connection. The module reports provider outages/timeouts and lets you retry.
+
+Twitch Discover shares identical in-flight searches and reuses raw stream pages and user lookups for up to 30 seconds across overlapping filter combinations. This reduces API use while preserving search matching and pagination. Tracking/location/blacklist status is refreshed from the local database on every response. Completed zero-viewer samples are not cached; each refresh can draw a new sample. These optimizations reduce quota use but cannot eliminate Twitch's API limits.
 
 ## Import an existing ScoutBot setup
 
