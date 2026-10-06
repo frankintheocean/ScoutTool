@@ -364,3 +364,112 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class SharedDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        discover_cache.invalidate_all()
+
+    async def asyncTearDown(self):
+        await discover_cache.close_pending_searches()
+        discover_cache.invalidate_all()
+
+    async def test_identical_searches_share_work_and_cache(self):
+        gate = asyncio.Event()
+        async def provider():
+            await gate.wait()
+            return {'items': ['alice']}
+        fetch = AsyncMock(side_effect=provider)
+        requests = [asyncio.create_task(discover_cache.shared_search(fetch, source='fixture')) for _ in range(20)]
+        await asyncio.sleep(0)
+        gate.set()
+        values = await asyncio.gather(*requests)
+        self.assertTrue(all(value == {'items': ['alice']} for value in values))
+        self.assertEqual(await discover_cache.shared_search(fetch, source='fixture'), values[0])
+        self.assertEqual(fetch.await_count, 1)
+        self.assertFalse(discover_cache._inflight)
+
+    async def test_cancelling_one_caller_preserves_other_caller(self):
+        gate = asyncio.Event()
+        async def provider():
+            await gate.wait()
+            return [1]
+        fetch = AsyncMock(side_effect=provider)
+        first = asyncio.create_task(discover_cache.shared_search(fetch, source='cancel'))
+        second = asyncio.create_task(discover_cache.shared_search(fetch, source='cancel'))
+        await asyncio.sleep(0)
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError): await first
+        gate.set()
+        self.assertEqual(await second, [1])
+        self.assertEqual(fetch.await_count, 1)
+
+    async def test_invalidation_during_fetch_cannot_repopulate_cache(self):
+        started = asyncio.Event(); gate = asyncio.Event()
+        async def provider():
+            started.set(); await gate.wait(); return 'old'
+        request = asyncio.create_task(discover_cache.shared_search(provider, source='generation'))
+        await started.wait()
+        discover_cache.invalidate_all(); gate.set()
+        self.assertEqual(await request, 'old')
+        self.assertIsNone(discover_cache.get_cached_discover(source='generation'))
+        fresh = AsyncMock(return_value='new')
+        self.assertEqual(await discover_cache.shared_search(fresh, source='generation'), 'new')
+        self.assertEqual(fresh.await_count, 1)
+
+    async def test_failures_are_not_cached_and_shutdown_cleans_pending(self):
+        fetch = AsyncMock(side_effect=[RuntimeError('outage'), 'retry'])
+        with self.assertRaises(RuntimeError): await discover_cache.shared_search(fetch, source='retry')
+        self.assertEqual(await discover_cache.shared_search(fetch, source='retry'), 'retry')
+        started = asyncio.Event()
+        async def stalled():
+            started.set(); await asyncio.Event().wait()
+        request = asyncio.create_task(discover_cache.shared_search(stalled, source='shutdown'))
+        await started.wait(); await discover_cache.close_pending_searches()
+        with self.assertRaises(asyncio.CancelledError): await request
+        self.assertFalse(discover_cache._inflight)
+
+    async def test_shutdown_before_provider_starts_removes_cancelled_task(self):
+        provider = AsyncMock(return_value='unused')
+        caller = asyncio.create_task(discover_cache.shared_search(provider, source='early-shutdown'))
+        await asyncio.sleep(0)
+        await discover_cache.close_pending_searches()
+        with self.assertRaises(asyncio.CancelledError): await caller
+        self.assertEqual(provider.await_count, 0)
+        self.assertFalse(discover_cache._inflight)
+
+    async def test_random_refreshes_and_cursor_requests_do_not_use_result_cache(self):
+        fetch = AsyncMock(side_effect=['first', 'second'])
+        self.assertEqual(await discover_cache.shared_search(fetch, cache=False, source='random'), 'first')
+        self.assertEqual(await discover_cache.shared_search(fetch, cache=False, source='random'), 'second')
+        self.assertEqual(fetch.await_count, 2)
+
+    async def test_different_filters_share_raw_twitch_page_and_user_lookups(self):
+        streams = [{'user_login':'share', 'user_name':'Share', 'user_id':'1', 'viewer_count':0, 'game_name':'Art', 'tags':['art']}]
+        users = {'1': {'broadcaster_type':'', 'profile_image_url':''}}
+        twitch.follower_cache.clear()
+        request = AsyncMock(return_value={'data':streams, 'pagination':{}})
+        with patch.object(twitch, 'twitch_request', request), patch.object(twitch, 'get_users_by_id', AsyncMock(return_value=users)), patch.object(twitch, 'get_followers', AsyncMock(return_value=0)):
+            first, _ = await twitch.search_streams(limit=1, max_viewers=0)
+            second, _ = await twitch.search_streams(limit=1, tags=['art'])
+        self.assertEqual(first[0]['username'], 'share')
+        self.assertEqual(second[0]['username'], 'share')
+        self.assertEqual(request.await_count, 1)
+
+
+class CachedDiscoveryStatusTests(unittest.TestCase):
+    def setUp(self):
+        fixtures.DatabaseTests.setUp(self)
+        discover_cache.invalidate_all()
+        self.addCleanup(discover_cache.invalidate_all)
+
+    def test_cached_results_refresh_local_tracking_and_do_not_mutate_provider_data(self):
+        raw = [{'username':'alice', 'category':'Art'}]
+        with patch.object(twitch, 'search_streams', AsyncMock(return_value=(raw, None))) as search:
+            first = self.client.get('/api/discover').json()
+            main.db.add_streamer(['alice', 'https://twitch.tv/alice'])
+            second = self.client.get('/api/discover').json()
+            self.assertFalse(first['items'][0]['already_tracked'])
+            self.assertTrue(second['items'][0]['already_tracked'])
+            self.assertNotIn('already_tracked', raw[0])
+            self.assertEqual(search.await_count, 1)

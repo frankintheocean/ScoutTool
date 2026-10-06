@@ -200,10 +200,11 @@ async def checks(url):
                 await route.fulfill(status=503,json={'detail':'nobody.live is busy. Try again.'})
                 return
             names=['mario_runner','chess_runner'] if query.get('match',['all'])[0]=='any' else ['mario_runner']
-            await route.fulfill(json={'source':'nobody.live','items':[{'username':name,'display_name':name,'category':'Mario','tags':['speedrun'],'title':'<img src=x onerror=alert(1)>','live_viewers':0,'already_tracked':False} for name in names]})
+            await route.fulfill(json={'source':'nobody.live','items':[{'username':name,'display_name':name,'category':'Mario','tags':['speedrun', 'x'*180, '日本語'*70], 'title':'<img src=x onerror=alert(1)>' + ' long title '*40,'live_viewers':0,'already_tracked':False} for name in names]})
         await page.route('**/api/discover/zero-viewers?*',zero_streams)
         await page.route('https://static-cdn.jtvnw.net/**',lambda route:route.abort())
-        await page.locator('#btnNobodyDiscover').click()
+        await page.locator('#btnDiscover').click()
+        await page.locator('#discoveryTabZero').click()
         await page.locator('#nobodySearchPhrase').fill('mario speedrun')
         await page.locator('#nobodyRememberFilters').check()
         await page.locator('#nobodyDiscoverSubmit').click()
@@ -222,7 +223,8 @@ async def checks(url):
         await page.set_viewport_size({'width':1400,'height':900})
         await page.keyboard.press('Escape')
         await page.reload(wait_until='networkidle')
-        await page.locator('#btnNobodyDiscover').click()
+        await page.locator('#btnDiscover').click()
+        await page.locator('#discoveryTabZero').click()
         assert await page.locator('#nobodySearchPhrase').input_value()=='mario speedrun'
         assert await page.locator('#nobodySearchMatch').input_value()=='any'
         assert await page.locator('#nobodyRememberFilters').is_checked()
@@ -237,13 +239,14 @@ async def checks(url):
         assert await page.locator('.zero-viewer-card').count()==2
         await page.locator('#nobodySearchPhrase').fill('slow')
         await page.evaluate('document.getElementById("nobodyDiscoverForm").requestSubmit()')
-        await page.evaluate('closeModal("nobodyDiscoverModal")')
+        await page.evaluate('closeModal("discoverModal")')
         await page.wait_for_timeout(350)
-        assert not await page.locator('#nobodyDiscoverModal').evaluate('(el)=>el.classList.contains("open")')
+        assert not await page.locator('#discoverModal').evaluate('(el)=>el.classList.contains("open")')
         assert await page.locator('.zero-viewer-card').count()==0
         assert not await page.locator('#nobodyDiscoverSubmit').is_disabled()
         passed.append('zero-viewer rapid searches and close discard stale results and cancel work')
-        await page.locator('#btnNobodyDiscover').click()
+        await page.locator('#btnDiscover').click()
+        await page.locator('#discoveryTabZero').click()
         await page.locator('#nobodySearchPhrase').fill('error')
         await page.locator('#nobodyDiscoverSubmit').click()
         await page.wait_for_function('document.getElementById("nobodyDiscoverStatus").textContent.includes("busy")')
@@ -261,13 +264,91 @@ async def checks(url):
         await page.evaluate('prepareDatabaseReplacement()')
         assert await page.locator('.zero-viewer-card').count()==0
         assert 'Database changed' in await page.locator('#nobodyDiscoverStatus').inner_text()
-        await page.evaluate('closeModal("nobodyDiscoverModal");Storage.prototype.setItem=window.fixtureStorageSet;localStorage.setItem("scoutbot_zero_viewer_filters","[]")')
+        await page.evaluate('closeModal("discoverModal");Storage.prototype.setItem=window.fixtureStorageSet;localStorage.setItem("scoutbot_zero_viewer_filters","[]")')
         await page.reload(wait_until='networkidle')
         assert await page.locator('#nobodySearchPhrase').input_value()==''
         assert not await page.locator('#nobodyRememberFilters').is_checked()
         passed.append('malformed remembered zero-viewer filter data is safely ignored')
         assert await page.evaluate('''() => { const grid=document.getElementById("cardGrid");const virtual=state.virtualScroll;state.virtualScroll=true;state.view="dashboard";teardownVirtualGrid(grid);renderVirtualGrid();const clean=!grid.classList.contains("card-grid-virtual");state.view="roster";state.virtualScroll=virtual;renderGrid();return clean; }''')
         passed.append('queued virtual rendering cannot resurrect the grid after switching to Dashboard')
+        # Shared discovery preserves independent filters/results and chips.
+        await page.route('**/api/discover?*', lambda route: route.fulfill(json={'items':[], 'next_cursor':None}))
+        await page.locator('#btnDiscover').click()
+        await page.locator('#discoveryTabZero').click()
+        await page.locator('#nobodySearchPhrase').fill('mario speedrun')
+        await page.locator('#nobodyRememberFilters').check()
+        await page.locator('#nobodyDiscoverSubmit').click()
+        await page.wait_for_function('document.querySelectorAll(".zero-viewer-card").length===1')
+        await page.locator('#discoveryTabTwitch').click()
+        await page.locator('#discoverMinViewers').fill('0')
+        await page.locator('#discoverTags').fill('Art,Chat')
+        await page.locator('#discoverSubmit').click()
+        await page.wait_for_function('document.getElementById("discoverResults").textContent.includes("No live streamers")')
+        assert 'Min viewers: 0' in await page.locator('#discoverFilterChips').inner_text()
+        await page.locator('#discoverFilterChips button',has_text='Clear filters').click()
+        assert await page.locator('#discoverTags').input_value()==''
+        assert await page.locator('#nobodySearchPhrase').input_value()=='mario speedrun'
+        await page.locator('#discoveryTabTwitch').focus()
+        await page.keyboard.press('ArrowRight')
+        assert await page.locator('#discoveryTabZero').get_attribute('aria-selected')=='true'
+        assert await page.locator('.zero-viewer-card').count()==1
+        passed.append('shared discovery tabs preserve results and independent filters; Twitch chips include zero and clear only their tab')
+        for width in (1360,900,600):
+            await page.set_viewport_size({'width':width,'height':800})
+            for size in ('smaller','normal','larger'):
+                await page.evaluate('(size)=>applyPrefs({...currentPrefs,fontSize:size})',size)
+                metrics=await page.evaluate("""() => {
+                  const header=document.querySelector('.topbar').getBoundingClientRect();
+                  const controls=[...document.querySelectorAll('.topbar-actions > .btn,.tools-menu summary')];
+                  const modal=document.querySelector('#discoverModal .modal').getBoundingClientRect();
+                  const card=document.querySelector('.zero-viewer-card').getBoundingClientRect();
+                  const tags=[...document.querySelectorAll('.zero-viewer-tags > span')].map(el=>el.getBoundingClientRect());
+                  return {headerContains:controls.every(el=>{const r=el.getBoundingClientRect();return r.top>=header.top&&r.bottom<=header.bottom&&r.right<=innerWidth;}),
+                    modalFits:modal.top>=0&&modal.bottom<=innerHeight&&modal.left>=0&&modal.right<=innerWidth,
+                    tagsFit:tags.every(r=>r.left>=card.left&&r.right<=card.right),
+                    titleSize:parseFloat(getComputedStyle(document.querySelector('.zero-viewer-title')).fontSize)};
+                }""")
+                assert metrics['headerContains'],(width,size,metrics)
+                assert metrics['modalFits'],(width,size,metrics)
+                assert metrics['tagsFit'],(width,size,metrics)
+                assert metrics['titleSize']==12,(width,size,metrics)
+        await page.evaluate('applyPrefs(currentPrefs)')
+        await page.set_viewport_size({'width':1360,'height':800})
+        await page.screenshot(path='/workspace/scout-discovery-v42.png')
+        passed.append('header bounds, modal viewport fit, long titles and Unicode/unbroken tags at 600/900/1360px in three text scales')
+        await page.locator('#nobodyFilterChips button',has_text='Search:').click()
+        await page.wait_for_function('document.getElementById("nobodySearchPhrase").value==="" && !document.getElementById("nobodyDiscoverSubmit").disabled')
+        assert await page.evaluate('JSON.parse(localStorage.getItem("scoutbot_zero_viewer_filters")).include')==''
+        assert await page.locator('#nobodyRememberFilters').is_checked()
+        await page.locator('#nobodySearchMatch').select_option('any')
+        await page.locator('#nobodyFilterChips button',has_text='Clear filters').click()
+        await page.wait_for_function('!document.getElementById("nobodyDiscoverSubmit").disabled')
+        assert await page.locator('#nobodySearchMatch').input_value()=='all'
+        assert await page.locator('#nobodyFilterChips button').count()==0
+        passed.append('zero-viewer removable chips and Clear filters update remembered filters')
+        await page.keyboard.press('Escape')
+        await page.evaluate('state.view="roster";state.search="old";state.priority="High";loadView()')
+        await page.wait_for_selector('#rosterFilterChips button',state='visible')
+        await page.evaluate("""() => { const input=document.getElementById('searchInput');input.value='stale pending';input.dispatchEvent(new Event('input'));clearRosterFilters(); }""")
+        await page.wait_for_timeout(250)
+        assert await page.evaluate('state.search==="" && state.priority===""')
+        assert await page.locator('#rosterFilterChips button').count()==0
+        assert await page.locator('#btnSortDir').evaluate('el=>el.getBoundingClientRect().width<200')
+        assert await page.locator('#btnRefreshView').evaluate('el=>el.getBoundingClientRect().width>=30')
+        assert await page.evaluate('''() => { const heights=['btnRefreshView','btnSortDir','densityToggle','sortBy'].map(id=>document.getElementById(id).getBoundingClientRect().height);return Math.max(...heights)-Math.min(...heights)<2; }''')
+        await page.screenshot(path='/workspace/scout-roster-v42.png')
+        passed.append('roster Clear filters cancels pending search debounce and toolbar direction button stays compact')
+        await page.locator('#toolsMenu summary').click()
+        assert await page.locator('#btnSettings').is_visible()
+        await page.keyboard.press('Escape')
+        assert not await page.locator('#toolsMenu').evaluate('el=>el.open')
+        await page.locator('#toolsMenu summary').click()
+        await page.locator('#btnChangelog').click()
+        assert await page.locator('#changelogModal').evaluate('el=>el.classList.contains("open")')
+        assert not await page.locator('#toolsMenu').evaluate('el=>el.open')
+        await page.keyboard.press('Escape')
+        assert await page.locator('#toolsMenu summary').evaluate('el=>el===document.activeElement')
+        passed.append('Tools menu retains secondary actions, closes on selection/Escape, and restores visible focus')
         assert errors==[],errors
         await browser.close()
     print(json.dumps({'passed':passed,'page_errors':errors},indent=2))

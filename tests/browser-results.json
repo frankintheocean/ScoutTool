@@ -24,7 +24,12 @@
     "zero-viewer rapid searches and close discard stale results and cancel work",
     "zero-viewer service errors are retryable and storage quota does not break search",
     "malformed remembered zero-viewer filter data is safely ignored",
-    "queued virtual rendering cannot resurrect the grid after switching to Dashboard"
+    "queued virtual rendering cannot resurrect the grid after switching to Dashboard",
+    "shared discovery tabs preserve results and independent filters; Twitch chips include zero and clear only their tab",
+    "header bounds, modal viewport fit, long titles and Unicode/unbroken tags at 600/900/1360px in three text scales",
+    "zero-viewer removable chips and Clear filters update remembered filters",
+    "roster Clear filters cancels pending search debounce and toolbar direction button stays compact",
+    "Tools menu retains secondary actions, closes on selection/Escape, and restores visible focus"
   ],
   "page_errors": []
 }
