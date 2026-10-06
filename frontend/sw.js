@@ -16,7 +16,7 @@
 // pick up the new build instead of serving a stale cached shell
 // forever (the activate handler below drops any cache under an older
 // version name).
-const CACHE_VERSION = "scoutbot-v4.0";
+const CACHE_VERSION = "scoutbot-v4.1";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const API_CACHE = `${CACHE_VERSION}-api-read`;
 
@@ -24,6 +24,7 @@ const SHELL_FILES = [
   "/",
   "/index.html",
   "/app.js",
+  "/nobody-discovery.js",
   "/styles.css",
 ];
 
@@ -53,7 +54,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) =>
       // addAll fails the whole install if any single file 404s — fine
-      // here since these four are always present in a working build;
+      // here since these files are always present in a working build;
       // if one genuinely is missing that's worth failing loudly on
       // rather than silently caching a partial, broken shell.
       cache.addAll(SHELL_FILES)

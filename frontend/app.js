@@ -892,19 +892,28 @@ function teardownVirtualGrid(grid) {
   _virtualObserver?.disconnect();
   _virtualObserver = null;
   grid._virtualHeights = null;
+  grid._virtualLayout = null;
   grid.classList.remove("card-grid-virtual");
   grid.style.display = "";
   grid.style.position = "";
   grid._virtualNodeByUsername = null;
 }
 
-// Renders only the rows whose top/bottom fall within the scrolled
-// viewport (+ overscan), each as its own single-column "row" of cards
-// so row height (and thus scroll math) stays predictable regardless of
-// how many columns the CSS grid's auto-fill currently lays out — a
-// wrapping div per row is simplest to size and reuse across scroll
-// events without measuring every card individually.
+function firstVirtualOffsetAtLeast(offsets, position) {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (offsets[middle] < position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+// Render visible CSS-grid rows plus overscan. Offsets use measured maximum
+// row heights; unvisited rows use an estimate until they enter the viewport.
 function renderVirtualGrid() {
+  if (!state.virtualScroll || state.view === "dashboard") return;
   const grid = document.getElementById("cardGrid");
   const main = document.querySelector(".main");
   if (!grid || !main) return;
@@ -925,17 +934,20 @@ function renderVirtualGrid() {
   if (grid._virtualColumns !== columns) grid._virtualHeights = new Map();
   grid._virtualColumns = columns;
   const heights = grid._virtualHeights || (grid._virtualHeights = new Map());
-  const offsets = [0];
-  for (let row = 0; row < rows; row++) offsets.push(offsets[row] + (heights.get(row) || VIRTUAL_ROW_ESTIMATE_PX) + gap);
+  let layout = grid._virtualLayout;
+  if (!layout || layout.rows !== rows || layout.columns !== columns || layout.gap !== gap || layout.heights !== heights) {
+    const offsets = [0];
+    for (let row = 0; row < rows; row++) offsets.push(offsets[row] + (heights.get(row) || VIRTUAL_ROW_ESTIMATE_PX) + gap);
+    layout = grid._virtualLayout = { rows, columns, gap, heights, offsets };
+  }
+  const offsets = layout.offsets;
   const totalHeight = offsets[rows];
   const scale = main.getBoundingClientRect().width / main.offsetWidth || 1;
   const gridTop = (grid.getBoundingClientRect().top - main.getBoundingClientRect().top) / scale + main.scrollTop;
   const scrollTop = Math.max(0, main.scrollTop - gridTop);
   const viewportHeight = main.clientHeight;
-  let firstRow = 0;
-  while (firstRow < rows - 1 && offsets[firstRow + 1] < scrollTop) firstRow++;
-  let lastRow = firstRow;
-  while (lastRow < rows - 1 && offsets[lastRow] < scrollTop + viewportHeight) lastRow++;
+  let firstRow = rows ? Math.max(0, Math.min(rows - 1, firstVirtualOffsetAtLeast(offsets, scrollTop) - 1)) : 0;
+  let lastRow = Math.max(firstRow, Math.min(rows - 1, firstVirtualOffsetAtLeast(offsets, scrollTop + viewportHeight)));
   firstRow = Math.max(0, firstRow - VIRTUAL_OVERSCAN_ROWS);
   lastRow = Math.min(rows - 1, lastRow + VIRTUAL_OVERSCAN_ROWS);
 
@@ -948,8 +960,8 @@ function renderVirtualGrid() {
   // frame. Cards already in the DOM for a username that's still visible
   // are moved into their new position (cheap, keeps listeners intact);
   // only newly-scrolled-into-view usernames get a fresh cardHtml() parse
-  // + wireCardEvents() call. Cards that scrolled out of view are removed
-  // and their DOM nodes discarded (grid.replaceChildren below).
+  // + wireCardEvents() call. Cards outside the window are removed below;
+  // retained cards stay attached so their editors and previews survive.
   let spacer = grid.querySelector(".card-grid-virtual-spacer");
   let windowEl = grid.querySelector(".card-grid-virtual-window");
   if (!spacer || !windowEl) {
@@ -987,7 +999,16 @@ function renderVirtualGrid() {
   for (const username of Array.from(nodeByUsername.keys())) {
     if (!seen.has(username)) nodeByUsername.delete(username);
   }
-  windowEl.replaceChildren(...nextNodes);
+  // Keep retained cards attached. Detaching a card also reloads its iframe
+  // and loses focus in an inline editor, even when the node itself is reused.
+  const retained = new Set(nextNodes);
+  for (const child of Array.from(windowEl.children)) {
+    if (!retained.has(child)) child.remove();
+  }
+  nextNodes.forEach((node, index) => {
+    const current = windowEl.children[index] || null;
+    if (current !== node) windowEl.insertBefore(node, current);
+  });
 
   let changed = false;
   for (let row = firstRow; row <= lastRow; row++) {
@@ -995,9 +1016,12 @@ function renderVirtualGrid() {
     const measured = Math.max(0, ...nodes.map(node => node.offsetHeight));
     if (measured && heights.get(row) !== measured) { heights.set(row, measured); changed = true; }
   }
-  if (changed) requestAnimationFrame(() => {
-    if (grid.isConnected && state.virtualScroll && grid.classList.contains("card-grid-virtual")) renderVirtualGrid();
-  });
+  if (changed) {
+    grid._virtualLayout = null;
+    requestAnimationFrame(() => {
+      if (grid.isConnected && state.virtualScroll && grid.classList.contains("card-grid-virtual")) renderVirtualGrid();
+    });
+  }
 
   if (!_virtualScrollHandler) {
     let ticking = false;
@@ -3427,6 +3451,7 @@ function openModal(id) {
 }
 
 async function prepareDatabaseReplacement() {
+  window.ScoutNobodyDiscovery?.reset();
   document.activeElement?.blur();
   if (_detailFlush) await _detailFlush();
   _detailFlush = null;
@@ -3460,6 +3485,7 @@ function closeModal(id) {
     vodState.busy = false;
   }
   if (id === "discoverModal") cancelDiscoverRequest();
+  if (id === "nobodyDiscoverModal") window.ScoutNobodyDiscovery?.cancel();
   if (activeModalId === id) {
     activeModalId = null;
     // Restore focus to whatever opened the modal, so keyboard users land
@@ -3830,7 +3856,6 @@ function renderDiscoverResults(filters) {
   wireTrackButtons(results);
   wireBlacklistButtons(results);
 
-  discoverState.loadingMore = true;
   const moreBtn = document.getElementById("discoverLoadMore");
   if (moreBtn) moreBtn.addEventListener("click", loadMoreDiscoverResults);
 }
@@ -3843,6 +3868,7 @@ async function loadMoreDiscoverResults() {
   cancelDiscoverRequest();
   const controller = new AbortController();
   discoverState.abortController = controller;
+  discoverState.loadingMore = true;
 
   const moreBtn = document.getElementById("discoverLoadMore");
   if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "Loading…"; }

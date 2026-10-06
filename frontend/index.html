@@ -50,6 +50,11 @@
       </div>
 
       <div class="rail-section">
+        <div class="rail-label">Discovery</div>
+        <button class="btn btn-ghost" id="btnNobodyDiscover" style="width:100%;">Zero-viewer streams</button>
+      </div>
+
+      <div class="rail-section">
         <div class="rail-label">Filter</div>
         <input type="text" id="searchInput" class="rail-search" placeholder="Search username, alias, notes…">
 
@@ -714,8 +719,42 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="nobodyDiscoverModal" role="dialog" aria-modal="true" aria-label="Zero-viewer discovery">
+  <div class="modal modal-wide">
+    <div class="modal-header">Zero-viewer discovery</div>
+    <div class="modal-body">
+      <p class="field-hint">Find random English-language streams with zero viewers using nobody.live. Search matches games and tags; viewer counts can change after the last scan.</p>
+      <form id="nobodyDiscoverForm" class="discover-form">
+        <div class="field-group" style="grid-column:1 / -1;">
+          <label class="field-label" for="nobodySearchPhrase">Search phrase</label>
+          <input id="nobodySearchPhrase" class="field-input" type="text" maxlength="65" placeholder="e.g. mario speedrun" autocomplete="off">
+          <div class="field-hint">Separate terms with spaces or commas. Leave blank for any zero-viewer stream. Maximum 65 characters.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="nobodySearchMatch">Match</label>
+          <select id="nobodySearchMatch" class="field-input">
+            <option value="all">All terms</option>
+            <option value="any">Any term</option>
+          </select>
+        </div>
+        <label class="rail-checkbox">
+          <input id="nobodyRememberFilters" type="checkbox">
+          <span>Remember my filters</span>
+        </label>
+        <button class="btn btn-primary" id="nobodyDiscoverSubmit" type="submit">Search / Refresh</button>
+      </form>
+      <p id="nobodyDiscoverStatus" class="field-hint" role="status" aria-live="polite">Choose your filters and search.</p>
+      <div id="nobodyDiscoverResults" class="zero-viewer-results" aria-busy="false"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close="nobodyDiscoverModal">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-stack" id="toastStack"></div>
 
 <script src="app.js"></script>
+<script src="nobody-discovery.js"></script>
 </body>
 </html>

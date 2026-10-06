@@ -2208,3 +2208,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     box-shadow: -8px 0 24px rgba(0,0,0,0.25);
   }
 }
+/* Independent zero-viewer discovery module. */
+.zero-viewer-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 14px;
+}
+.zero-viewer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.zero-viewer-card > a { width: 100%; }
+.zero-viewer-card img { display: block; width: 100%; height: auto; margin-bottom: 8px; }
