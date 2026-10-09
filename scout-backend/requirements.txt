@@ -1,0 +1,32 @@
+fastapi>=0.111.0
+uvicorn>=0.30.0
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+# Required by FastAPI's UploadFile/File(...) form-data parsing, used by
+# POST /api/system/import (main.py) to accept an uploaded .env/
+# streamers.db. FastAPI raises a runtime error on that endpoint without
+# this installed — it isn't pulled in automatically by fastapi itself.
+python-multipart>=0.0.9
+# WebSocket protocol implementation uvicorn needs to serve /api/ws
+# (main.py) — bare `uvicorn` doesn't pull this in on its own, only the
+# `uvicorn[standard]` extra does, so it's listed explicitly rather than
+# relying on that extra.
+websockets>=12.0
+
+# Native desktop window (backend/desktop_launcher.py, used by the packaged
+# Windows build — see build/scoutbot.spec). Not needed to run from source
+# with `uvicorn main:app` as documented in README.md.
+pywebview>=5.0
+# pywebview's Windows backend (WinForms + Edge WebView2) needs these three;
+# WebView2 Runtime itself is a system component, not a pip package, and
+# ships with modern Windows 10/11 — see README.md.
+pythonnet>=3.0.3; sys_platform == "win32"
+pywin32>=306; sys_platform == "win32"
+comtypes>=1.2.0; sys_platform == "win32"
+
+yt-dlp>=2026.1.0
+
+
+# Windows has no system IANA timezone database.
+tzdata>=2025.1; sys_platform == "win32"
