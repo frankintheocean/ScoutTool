@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+streamers.db*
+bot.log*
+dist/
+build/work/
+build/ScoutBot/
+install-progress.txt
+build-install.log
+downloads/
